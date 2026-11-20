@@ -1,0 +1,39 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+# Keep .terraform.lock.hcl committed (it pins provider versions for the whole team)
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Lambda build output
+build/
+dist/
+*.zip
+
+# Secrets and local config
+.env
+.env.*
+*.pem
+credentials
+.aws/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
