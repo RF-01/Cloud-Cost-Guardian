@@ -351,7 +351,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 ## 9. Open values (to fill in as the team decides — design §24)
 
 Detection thresholds · real detection window · Elastic IP "stopped too long" threshold · allowed instance types ·
-budget amounts · Bedrock model, cap and answer length · team address and sender address.
+budget amounts · Bedrock model, cap and answer length.
 (Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days.)
 
 ## 10. Change log
@@ -364,3 +364,4 @@ budget amounts · Bedrock model, cap and answer length · team address and sende
   once then digest only; VPC and the action HTTP API moved into platform core, `origin_secret` passed to dashboard,
   module order fixed (§8); new settings `POSTPONE_SECONDS`, `RESTORE_LINK_DAYS`; `firstSeenAt` resets on reopen.
 - v2.1 — removed `scheduled` from `reportOnlyReason` (office-hours scheduling set aside, design §21.1).
+- v2.1 (Nov 21): team/sender address decided, removed from §9.

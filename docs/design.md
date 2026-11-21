@@ -684,7 +684,7 @@ Emails to individual owners are sent with **Amazon SES**. SNS is kept only for a
 **How it works:**
 
 1. The **Notify Lambda** builds each email from an HTML template (buttons for action links, plain-text version included) and calls the SES `SendEmail` API. Step Functions workflows, the scanner and the digest Lambda all call this one function, so templates live in one place.
-2. One **sender address** (e.g., the team's Gmail) is verified in SES.
+2. One **sender address** (`rif07@mail.aub.edu`, also the team address) is verified in SES.
 3. SES stays in **sandbox mode**: it can only send to verified addresses, up to 200 emails per day and 1 per second. Each team member verifies their address once. This is enough for the course; production access is not needed.
 4. If an owner's address is not verified (or the send fails), the Notify Lambda **falls back to the team address**, the same way as a missing `owner` tag, and records this in the audit log.
 5. SES runs in us-west-2, with the rest of the Guardian.
@@ -1056,13 +1056,13 @@ The work is split into four lanes that can be built in parallel against a shared
 
 Console-only steps, with the reason for each, are kept in `docs/manual-setup.md`.
 
-- [ ] **Turn on MFA for the root user.**
+- [x] **Turn on MFA for the root user.**
 - [x] **Check the AWS account's plan:** free plan with Free Tier credits. So **never** enable AWS Organizations or IAM Identity Center: on the free plan, either one upgrades the account and ends the credits (§8.7).
 - [x] **Activate IAM user and role access to Billing information** (root only), so IAM users can open Budgets and Cost Explorer.
-- [ ] **Create one IAM user per team member**, each with an `email` tag; stop using the root user for daily work. *(First admin user created by hand; teammates' users via Terraform.)*
+- [x] **Create one IAM user per team member**, each with an `email` tag; stop using the root user for daily work. *(First admin user created by hand; teammates' users via Terraform.)*
 - [x] **Enable Cost Explorer** (data takes a day or more to appear).
 - [x] **Create the Terraform state bucket and the account budget alert** (`bootstrap/`).
-- [ ] **Verify the sender address and each team member's address in SES** (Terraform creates the identities; each person clicks the verification email).
+- [x] **Verify the sender address and each team member's address in SES** (Terraform creates the identities; each person clicks the verification email).
 - [ ] **Activate `project` and `owner` as cost allocation tags** (Terraform), once at least one resource carries them. If done late, request a backfill (§11.2).
 - [ ] **Enable access to the chosen Bedrock model** in us-west-2, if the model requires it, and check its pricing.
 
@@ -1078,7 +1078,6 @@ Console-only steps, with the reason for each, are kept in `docs/manual-setup.md`
 
 Decide before building the part that needs it:
 
-- **Team address and sender address** for SES (needed early: platform core creates and verifies them).
 - **Which Bedrock model**, its daily cap and maximum answer length.
 - Whether to add the optional network ACL (§6.4).
 - Exact timings: scan interval, detection window for the real tool, workflow waits, reminder intervals, Elastic IP "stopped too long" threshold. *(Defaults set in `CONTRACT.md`: postpone 7 days, at most 2 postpones, at most 2 automatic restarts, restore links valid 30 days.)*
@@ -1087,7 +1086,7 @@ Decide before building the part that needs it:
 - Budget amounts per project and alert thresholds (the account budget is $5).
 - Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers.
 
-*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22).*
+*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox).*
 
 ---
 
