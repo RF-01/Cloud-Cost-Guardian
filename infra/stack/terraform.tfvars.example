@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars (ignored by Git) and fill in. Never commit terraform.tfvars.
+
+name_prefix = "cg-yourname-"
+owner_email = "you@mail.aub.edu"
+aws_profile = "guardian"
+
+# Personal stacks: keep these two as they are (CLAUDE.md).
+team_stack = false
+dry_run    = true
+
+team_email   = "rif07@mail.aub.edu"
+sender_email = "rif07@mail.aub.edu"
+scan_regions = "all"
+
+# Set after task #15.
+bedrock_model_id = ""
+
+# At least 16 characters each; generate random values, never reuse real passwords.
+origin_secret      = "CHANGE-ME-origin-secret-32-chars"
+dashboard_password = "CHANGE-ME-dashboard-password-32c"

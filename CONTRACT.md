@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.1 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.2 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -337,10 +337,10 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 
 | Module | Inputs (besides `name_prefix`, `owner_email`, `dry_run`) | Outputs |
 |---|---|---|
-| `platform/terraform/core` | `team_email`, `sender_email` | table names and ARNs, `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
-| `engine/terraform` | tables, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
-| `scanner/terraform` | tables, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope` | `scanner_function_arn` |
-| `dashboard/terraform` | tables, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
+| `platform/terraform/core` | `team_email`, `sender_email` | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
+| `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
+| `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope` | `scanner_function_arn` |
+| `dashboard/terraform` | `table_names`, `table_arns`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_password` (sensitive) | `dashboard_url` |
 
 - `origin_secret` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
@@ -365,3 +365,5 @@ budget amounts · Bedrock model, cap and answer length.
   module order fixed (§8); new settings `POSTPONE_SECONDS`, `RESTORE_LINK_DAYS`; `firstSeenAt` resets on reopen.
 - v2.1 — removed `scheduled` from `reportOnlyReason` (office-hours scheduling set aside, design §21.1).
 - v2.1 (Nov 21): team/sender address decided, removed from §9.
+- v2.2 — §8: core exposes the tables as `table_names` / `table_arns` maps (keys listed); engine takes
+  `dev_scope` (remediation and action Lambdas, §6).
