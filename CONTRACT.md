@@ -11,8 +11,8 @@ Section numbers like "design §9.1" refer to `docs/design.md`.
 
 | Thing | Format | Example |
 |---|---|---|
-| Name prefix (per person's stack) | `cg-<name>-` | `cg-reda-` |
-| Every AWS resource name | `<prefix><name>` | `cg-reda-findings`, `cg-reda-scanner` |
+| Name prefix (per stack) | `cg-<name>-` | `cg-dev-` |
+| Every AWS resource name | `<prefix><name>` | `cg-dev-findings`, `cg-dev-scanner` |
 | Step Functions execution name | `<ec2\|ebs>-<resourceId>-gen<N>` | `ebs-vol-0abc123-gen2` |
 | Region we deploy to | `us-west-2` | |
 
@@ -289,15 +289,15 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `project` | text | project name; cost allocation tag |
 | `guardian:protect` | `true` | report-only; IAM denies stop / delete |
 | `guardian:source-volume` | volume id | on snapshots the Guardian creates |
-| `guardian:dev-scope` | a name prefix, e.g. `cg-reda-` | dev only: which personal stack may act on this test resource (§6) |
+| `guardian:dev-scope` | a name prefix, e.g. `cg-dev-` | dev only: which personal stack may act on this test resource (§6) |
 | `email` | email | on IAM users, for the CloudTrail lookup |
 
 ## 6. Configuration (Lambda environment variables)
 
 | Variable | Used by | Example |
 |---|---|---|
-| `NAME_PREFIX` | all | `cg-reda-` |
-| `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-reda-findings` |
+| `NAME_PREFIX` | all | `cg-dev-` |
+| `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-dev-findings` |
 | `DRY_RUN` | engine, scanner (tag copying) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
 | `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed |
@@ -305,7 +305,7 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `EC2_SFN_ARN`, `EBS_SFN_ARN` | `common/timeline.py` | |
 | `WAIT_BEFORE_FINAL_SECONDS_EC2`, `WAIT_BEFORE_ACTION_SECONDS_EC2`, same for `_EBS` | scanner, action (passed into workflow input) | `120` |
 | `POSTPONE_SECONDS` | action | `604800` (7 days); minutes in tests |
-| `NOTIFY_FUNCTION_NAME` | scanner, digest, action, engine | `cg-reda-notify` |
+| `NOTIFY_FUNCTION_NAME` | scanner, digest, action, engine | `cg-dev-notify` |
 | `SENDER_EMAIL`, `TEAM_EMAIL` | notify | |
 | `ACTION_API_URL` | notify | output of platform core (§8) |
 | `RESTORE_LINK_DAYS` | engine (sets restore `expiresAt`) | `30` |
@@ -367,3 +367,4 @@ budget amounts · Bedrock model, cap and answer length.
 - v2.1 (Nov 21): team/sender address decided, removed from §9.
 - v2.2 — §8: core exposes the tables as `table_names` / `table_arns` maps (keys listed); engine takes
   `dev_scope` (remediation and action Lambdas, §6).
+- v2.2 (Nov 21): prefix examples now cg-dev-

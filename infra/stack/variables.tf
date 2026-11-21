@@ -1,10 +1,10 @@
 variable "name_prefix" {
-  description = "Prefix of every resource name in this stack, e.g. cg-reda- (CONTRACT §1)"
+  description = "Prefix of every resource name in this stack, e.g. cg-dev- (CONTRACT §1)"
   type        = string
 
   validation {
     condition     = can(regex("^cg-[a-z0-9]+-$", var.name_prefix))
-    error_message = "name_prefix must look like cg-<name>- (lowercase letters and digits), e.g. cg-reda-."
+    error_message = "name_prefix must look like cg-<name>- (lowercase letters and digits), e.g. cg-dev-."
   }
 }
 

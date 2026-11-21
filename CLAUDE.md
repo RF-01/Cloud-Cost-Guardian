@@ -62,7 +62,7 @@ Shared folders:
 - State lives in S3 bucket `cost-guardian-tfstate-<account id>` with `use_lockfile = true`:
   - `infra/shared` → key `shared/terraform.tfstate`
   - `infra/stack` → key `stacks/<name_prefix>/terraform.tfstate` (one per person, set with `-backend-config`)
-- Every resource name starts with `var.name_prefix` (e.g. `cg-reda-`), so personal copies never collide.
+- Every resource name starts with `var.name_prefix` (e.g. `cg-dev-`), so personal copies never collide.
 - Provider `default_tags`: `project = "cost-guardian"`, `owner = var.owner_email`, `managed-by = "terraform"`.
   EC2 instances also need `volume_tags`.
 - Secrets (dashboard password, origin header secret) are `sensitive` variables in an uncommitted `terraform.tfvars`.

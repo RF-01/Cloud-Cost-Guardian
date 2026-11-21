@@ -12,6 +12,7 @@ These are the only console steps. Everything else is in Terraform.
 | 5 | Click the SES verification email for each address | each person | Proves ownership of the address; Terraform creates the identity, the click is by design manual | Done |
 | 6 | Bedrock model access (if the chosen model asks for it) | admin | One-time agreement in the console | |
 | 7 | Cost allocation tag backfill (only if tags were activated late) | admin | Console button | Not needed yet |
+| 8 | Confirm the SNS subscription email for the team-alerts topic | rif07 | AWS requires the recipient to click | |
 
 Terraform order notes:
 - `bootstrap/` creates the state bucket (its own state stays local).

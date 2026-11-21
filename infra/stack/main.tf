@@ -30,16 +30,16 @@ locals {
 # --- Lane C: platform core ---------------------------------------------------
 # Outputs (§8): table_names / table_arns (maps, keys in CONTRACT §8), team_topic_arn, dlq_arn, notify_function_arn / name,
 # vpc_id, public_subnet_id, action_api_id, action_api_execution_arn, action_api_url.
-#
-# module "platform_core" {
-#   source = "../../platform/terraform/core"
-#
-#   name_prefix  = var.name_prefix
-#   owner_email  = var.owner_email
-#   dry_run      = var.dry_run
-#   team_email   = var.team_email
-#   sender_email = var.sender_email
-# }
+
+module "platform_core" {
+  source = "../../platform/terraform/core"
+
+  name_prefix  = var.name_prefix
+  owner_email  = var.owner_email
+  dry_run      = var.dry_run
+  team_email   = var.team_email
+  sender_email = var.sender_email
+}
 
 # --- Lane A: engine ----------------------------------------------------------
 # Outputs (§8): ec2_sfn_arn, ebs_sfn_arn, remediation_function_arn, action_function_arn.
