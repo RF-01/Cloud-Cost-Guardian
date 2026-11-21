@@ -1,0 +1,3 @@
+pytest
+boto3
+moto[dynamodb,stepfunctions,ec2,cloudwatch]

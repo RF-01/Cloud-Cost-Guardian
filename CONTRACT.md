@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.2 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.3 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -70,7 +70,7 @@ Attributes:
 | `executionArn` | S | `common/timeline.py` | |
 | `timelineStep` | S | engine workflow | `first_notice` \| `waiting` \| `final_warning` \| `acting` \| `done` (dashboard display) |
 | `deadlineAt` | S | engine | when the action is due; also the expiry of Protect / Postpone links |
-| `postponeCount` | N | action Lambda | max `MAX_POSTPONES` |
+| `postponeCount` | N | `common/timeline.py` (postpone) | max `MAX_POSTPONES` |
 | `restartCount` | N | `common/timeline.py` | automatic restarts after `failed`, max `MAX_RESTARTS` |
 | `failedStep` | S | engine Catch | |
 | `errorMessage` | S | engine Catch | |
@@ -262,12 +262,16 @@ A postpone starts the next generation with `beforeFinalSeconds` = `POSTPONE_SECO
 
 ### 4.5 `common/timeline.py` (owned by lane A, used by scanner and action Lambda)
 ```python
-start_timeline(resource_id, finding_type, reason) -> dict
-    # reason: "new" | "reopen" | "restart" | "postpone"
-    # gen+1 with a conditional write, StartExecution with <type>-<id>-gen<N>,
-    # handles ExecutionAlreadyExists (design §9.1). Sets status in_progress. Returns the updated finding.
+start_timeline(resource_id, finding_type, reason) -> {"result": str, "finding": dict}
+    # reason / required status: new -> open, reopen -> open, restart -> failed (restartCount < MAX_RESTARTS,
+    #   +1), postpone -> in_progress (stops the current execution first; postponeCount < MAX_POSTPONES, +1).
+    # Status, limits and counters are checked/updated in the same conditional write that claims gen+1.
+    # A new generation clears failedStep, errorMessage, deadlineAt, remediatedAt, resolvedAt, dryRun,
+    #   realizedMonthlySavings.
+    # result: started | adopted | already_running | lost_race | superseded.
 stop_timeline(resource_id, finding_type, new_status, report_only_reason=None) -> dict
-    # StopExecution on the current execution (ignores "already finished"), updates status.
+    # StopExecution on the current execution (ignores "already finished"), updates status;
+    # sets timelineStep = done only if the finding has an executionName.
 ```
 No other code calls `StartExecution` / `StopExecution` directly.
 
@@ -368,3 +372,6 @@ budget amounts · Bedrock model, cap and answer length.
 - v2.2 — §8: core exposes the tables as `table_names` / `table_arns` maps (keys listed); engine takes
   `dev_scope` (remediation and action Lambdas, §6).
 - v2.2 (Nov 21): prefix examples now cg-dev-
+- v2.3 — §4.5: start_timeline returns {result, finding}, checks status per reason, postpone stops the
+  current execution and owns postponeCount (§3.1), new generations clear stale fields; stop_timeline sets
+  timelineStep only for findings that had a timeline.
