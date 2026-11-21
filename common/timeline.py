@@ -309,16 +309,17 @@ def start_timeline(resource_id, finding_type, reason):
             attr = COUNTERS[counter_reason][0]
             if int(finding.get(attr, 0)) >= _limit(counter_reason):
                 raise ValueError(f"{resource_id}#{finding_type}: {reason} limit ({_limit(counter_reason)}) reached")
-        if reason == "postpone":
-            old_arn = _current_execution_arn(finding)
-            if old_arn:
-                _log(resource_id, finding_type, "stop_timeline", _stop_quietly(old_arn), reason="postpone",
-                     executionName=finding.get("executionName"))
+        # Postpone: remember the old execution now; it is stopped only once gen+1 is claimed.
+        old_arn = _current_execution_arn(finding) if reason == "postpone" else None
+        old_name = finding.get("executionName")
         claimed = _claim_generation(finding, gen, required, counter_reason)
 
     if claimed is None:
         return _outcome(resource_id, finding_type, "lost_race", _get_finding(resource_id, finding_type),
                         reason=reason)
+    if not pending and old_arn:
+        _log(resource_id, finding_type, "stop_timeline", _stop_quietly(old_arn), reason="postpone",
+             executionName=old_name)
     finding = claimed
 
     for _attempt in range(MAX_START_ATTEMPTS):

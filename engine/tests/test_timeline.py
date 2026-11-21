@@ -380,6 +380,30 @@ def test_postpone_limit(aws, monkeypatch):
     assert start("postpone")["finding"]["postponeCount"] == 3
 
 
+@pytest.mark.parametrize("change", [
+    {"postponeCount": Decimal(2)},   # another click reached the limit after our read
+    {"generation": Decimal(2)},      # another postpone already claimed gen+1
+    {"status": "resolved"},          # the scanner resolved it meanwhile
+])
+def test_postpone_failed_claim_leaves_old_execution_running(aws, monkeypatch, capsys, change):
+    put(aws)
+    running = start()["finding"]
+    stale = get(aws)
+    sets = ", ".join(f"#{k} = :{k}" for k in change)
+    aws["table"].update_item(Key={"resourceId": "i-0abc123", "findingType": "EC2_IDLE"},
+                             UpdateExpression="SET " + sets,
+                             ExpressionAttributeNames={f"#{k}": k for k in change},
+                             ExpressionAttributeValues={f":{k}": v for k, v in change.items()})
+    capsys.readouterr()
+
+    first_read_returns(monkeypatch, stale)
+    out = start("postpone")
+    assert out["result"] == "lost_race"
+    assert aws["sfn"].describe_execution(executionArn=running["executionArn"])["status"] == "RUNNING"
+    assert len(executions(aws)) == 1
+    assert all(line["action"] != "stop_timeline" for line in log_lines(capsys))
+
+
 def test_stale_fields_cleared_on_restart(aws):
     put(aws, generation=Decimal(1), executionName="ec2-i-0abc123-gen1",
         executionArn=ARN_X + "ec2-i-0abc123-gen1", status="failed", **STALE)
