@@ -1081,7 +1081,7 @@ Decide before building the part that needs it:
 - **Which Bedrock model**, its daily cap and maximum answer length.
 - Whether to add the optional network ACL (§6.4).
 - Exact timings: scan interval, detection window for the real tool, workflow waits, reminder intervals, Elastic IP "stopped too long" threshold. *(Defaults set in `CONTRACT.md`: postpone 7 days, at most 2 postpones, at most 2 automatic restarts, restore links valid 30 days.)*
-- Detection thresholds for CPU, network and disk (tuned during testing).
+- Detection thresholds for CPU, network and disk (tuned during testing). Initial values (common/idle.py, set during testing Nov 22): CPU avg < 5% and max < 20%, network < 2 MB/hour, disk < 3,600 ops/hour (1 op/s).
 - Allowed instance types for the guardrails.
 - Budget amounts per project and alert thresholds (the account budget is $5).
 - Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers.

@@ -1,9 +1,21 @@
-"""EC2 activity signals and classification (design §8.2).
+"""EC2 idle rules shared by the scanner (detection) and the remediation Lambda (re-check), design §8.2.
 
-Only GetMetricStatistics is used (free API allowance); never GetMetricData (always billed).
+Thresholds are the initial values decided by the team (design §24). Only GetMetricStatistics is used
+(free API allowance); never GetMetricData (always billed).
 """
 
-from scanner import config
+# --- EC2 idle thresholds, per hour, scaled to the detection window -----------------------------------
+CPU_AVG_PERCENT = 5.0  # CPU average below this is "low"
+CPU_MAX_PERCENT = 20.0  # CPU maximum at or above this is a spike (periodic)
+NETWORK_BYTES_PER_HOUR = 2 * 1024 * 1024  # NetworkIn + NetworkOut, 2 MB per hour
+# VolumeReadOps + VolumeWriteOps over all attached volumes: 3,600 per hour = 1 op/s on average. Idle hosts still
+# write logs and run timers (~0.5 op/s; 100/hour flagged a freshly booted, idle AL2023 instance as underused in the
+# Nov 22 live test), while disk-heavy workloads run at tens to hundreds of ops/s.
+DISK_OPS_PER_HOUR = 3600
+
+METRIC_PERIOD_SECONDS = 300  # basic monitoring granularity
+
+DEFAULT_DETECTION_WINDOW_MINUTES = 30  # demo value; the real tool uses e.g. 1440
 
 
 def _datapoints(cloudwatch, namespace, metric, dim_name, dim_value, start, end, statistics):
@@ -13,7 +25,7 @@ def _datapoints(cloudwatch, namespace, metric, dim_name, dim_value, start, end, 
         Dimensions=[{"Name": dim_name, "Value": dim_value}],
         StartTime=start,
         EndTime=end,
-        Period=config.METRIC_PERIOD_SECONDS,
+        Period=METRIC_PERIOD_SECONDS,
         Statistics=statistics,
     ).get("Datapoints", [])
 
@@ -49,10 +61,10 @@ def classify(signals, window_minutes):
     if signals["cpuAvg"] is None:
         return None
     hours = window_minutes / 60
-    cpu_avg_low = signals["cpuAvg"] < config.CPU_AVG_PERCENT
-    cpu_max_low = signals["cpuMax"] < config.CPU_MAX_PERCENT
-    network_low = signals["networkBytes"] < config.NETWORK_BYTES_PER_HOUR * hours
-    disk_low = signals["diskOps"] < config.DISK_OPS_PER_HOUR * hours
+    cpu_avg_low = signals["cpuAvg"] < CPU_AVG_PERCENT
+    cpu_max_low = signals["cpuMax"] < CPU_MAX_PERCENT
+    network_low = signals["networkBytes"] < NETWORK_BYTES_PER_HOUR * hours
+    disk_low = signals["diskOps"] < DISK_OPS_PER_HOUR * hours
     if not cpu_avg_low:
         return None
     if network_low and disk_low:

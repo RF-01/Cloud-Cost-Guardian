@@ -26,13 +26,17 @@ variable "table_arns" {
 }
 
 variable "ec2_sfn_arn" {
-  description = "EC2 timeline state machine ARN (engine). Empty: timelines are skipped and no states:* permission is granted"
+  description = "EC2 timeline state machine ARN (engine). Empty or null: timelines are skipped and no states:* permission is granted"
   type        = string
+  default     = ""
+  nullable    = false # engine outputs null until a workflow exists (EBS: #30); null becomes ""
 }
 
 variable "ebs_sfn_arn" {
-  description = "EBS timeline state machine ARN (engine). Empty: timelines are skipped and no states:* permission is granted"
+  description = "EBS timeline state machine ARN (engine). Empty or null: timelines are skipped and no states:* permission is granted"
   type        = string
+  default     = ""
+  nullable    = false # engine outputs null until a workflow exists (EBS: #30); null becomes ""
 }
 
 variable "notify_function_name" {

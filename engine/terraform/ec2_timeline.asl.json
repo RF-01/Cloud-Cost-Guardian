@@ -1,0 +1,350 @@
+{
+  "Comment": "EC2 idle timeline (design 9.2). Input: CONTRACT 4.4. Every findings update is conditional on generation = input generation AND status = in_progress; a failed condition (postpone, restart, protect, scanner resolve) ends the execution quietly. No failure Catch yet (task #19).",
+  "QueryLanguage": "JSONata",
+  "TimeoutSeconds": 2592000,
+  "StartAt": "SetDeadline",
+  "States": {
+    "SetDeadline": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": {
+          "resourceId": { "S": "{% $states.input.resourceId %}" },
+          "findingType": { "S": "{% $states.input.findingType %}" }
+        },
+        "UpdateExpression": "SET deadlineAt = :deadline, timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":deadline": { "S": "{% $fromMillis($toMillis($now()) + ($states.input.waits.beforeFinalSeconds + $states.input.waits.beforeActionSeconds) * 1000, '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') %}" },
+          ":step": { "S": "first_notice" },
+          ":gen": { "N": "{% $string($states.input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        },
+        "ReturnValues": "UPDATED_NEW"
+      },
+      "Assign": {
+        "input": "{% $states.input %}",
+        "deadlineAt": "{% $states.result.Attributes.deadlineAt.S %}",
+        "cost": "{% $type($states.input.estimatedMonthlyCost) = 'number' ? $round($states.input.estimatedMonthlyCost, 2) : null %}"
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "FirstNotice"
+    },
+    "FirstNotice": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "FIRST_NOTICE",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": ["protect", "postpone"],
+              "expiresAt": "{% $deadlineAt %}"
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "resourceType": "{% $input.resourceType %}",
+            "region": "{% $input.region %}",
+            "estimatedMonthlyCost": "{% $cost %}",
+            "deadlineAt": "{% $deadlineAt %}",
+            "plannedAction": "stop",
+            "dryRun": "{% $input.dryRun %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Next": "StepWaiting"
+    },
+    "StepWaiting": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "waiting" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "WaitBeforeFinal"
+    },
+    "WaitBeforeFinal": {
+      "Type": "Wait",
+      "Seconds": "{% $input.waits.beforeFinalSeconds %}",
+      "Next": "RecheckBeforeFinal"
+    },
+    "RecheckBeforeFinal": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${check_payload}
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": ${remediation_retry},
+      "Next": "StillIdleBeforeFinal"
+    },
+    "StillIdleBeforeFinal": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.protected = true %}",
+          "Next": "MarkProtected"
+        },
+        {
+          "Condition": "{% $states.input.stillIdle = true and $states.input.protected = false %}",
+          "Next": "StepFinalWarning"
+        }
+      ],
+      "Default": "MarkResolved"
+    },
+    "StepFinalWarning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "final_warning" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "FinalWarning"
+    },
+    "FinalWarning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "FINAL_WARNING",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": ["protect", "postpone"],
+              "expiresAt": "{% $deadlineAt %}"
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "resourceType": "{% $input.resourceType %}",
+            "region": "{% $input.region %}",
+            "estimatedMonthlyCost": "{% $cost %}",
+            "deadlineAt": "{% $deadlineAt %}",
+            "plannedAction": "stop",
+            "dryRun": "{% $input.dryRun %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Next": "WaitBeforeAction"
+    },
+    "WaitBeforeAction": {
+      "Type": "Wait",
+      "Seconds": "{% $input.waits.beforeActionSeconds %}",
+      "Next": "RecheckBeforeAction"
+    },
+    "RecheckBeforeAction": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${check_payload}
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": ${remediation_retry},
+      "Next": "StillIdleBeforeAction"
+    },
+    "StillIdleBeforeAction": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.protected = true %}",
+          "Next": "MarkProtected"
+        },
+        {
+          "Condition": "{% $states.input.stillIdle = true and $states.input.protected = false %}",
+          "Next": "StepActing"
+        }
+      ],
+      "Default": "MarkResolved"
+    },
+    "StepActing": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "acting" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "StopInstance"
+    },
+    "StopInstance": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": {
+          "action": "STOP_INSTANCE",
+          "resourceId": "{% $input.resourceId %}",
+          "region": "{% $input.region %}",
+          "dryRun": "{% $input.dryRun %}"
+        }
+      },
+      "Assign": {
+        "stop": "{% $states.result.Payload %}"
+      },
+      "Retry": ${remediation_retry},
+      "Next": "StoppedByGuardian"
+    },
+    "StoppedByGuardian": {
+      "Type": "Choice",
+      "Comment": "Not stopped and not a dry run: someone else stopped it first, so it is not a Guardian saving.",
+      "Choices": [
+        {
+          "Condition": "{% $stop.stopped = false and $stop.dryRun = false %}",
+          "Next": "MarkResolved"
+        }
+      ],
+      "Default": "MarkRemediated"
+    },
+    "MarkRemediated": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "{% 'SET #st = :remediated, remediatedAt = :now, dryRun = :dryRun, timelineStep = :done' & ($cost != null ? ', realizedMonthlySavings = :savings' : '') %}",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": "{% $merge([{':remediated': {'S': 'remediated'}, ':now': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, ':dryRun': {'BOOL': $stop.dryRun}, ':done': {'S': 'done'}, ':gen': {'N': $string($input.generation)}, ':inProgress': {'S': 'in_progress'}}, $cost != null ? {':savings': {'N': $string($cost)}} : {}]) %}"
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "StopConfirmation"
+    },
+    "StopConfirmation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "STOP_CONFIRMATION",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": []
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "region": "{% $input.region %}",
+            "realizedMonthlySavings": "{% $cost %}",
+            "dryRun": "{% $stop.dryRun %}",
+            "elasticIps": "{% $stop.elasticIps %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Next": "Remediated"
+    },
+    "Remediated": {
+      "Type": "Succeed"
+    },
+    "MarkResolved": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :resolved, resolvedAt = :now, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":resolved": { "S": "resolved" },
+          ":now": { "S": "{% $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') %}" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "Resolved"
+    },
+    "Resolved": {
+      "Type": "Succeed"
+    },
+    "MarkProtected": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :open, reportOnlyReason = :protected, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":open": { "S": "open" },
+          ":protected": { "S": "protected" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": ${superseded_catch},
+      "Next": "Protected"
+    },
+    "Protected": {
+      "Type": "Succeed",
+      "Comment": "The protect tag was found at a re-check: report-only from now on (CONTRACT 3.2)."
+    },
+    "Superseded": {
+      "Type": "Succeed",
+      "Comment": "The finding moved on (new generation, protected, resolved by the scanner): this execution must not write anything."
+    }
+  }
+}

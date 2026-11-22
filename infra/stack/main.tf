@@ -43,24 +43,28 @@ module "platform_core" {
 
 # --- Lane A: engine ----------------------------------------------------------
 # Outputs (§8): ec2_sfn_arn, ebs_sfn_arn, remediation_function_arn, action_function_arn.
-# (Engine adds the /action routes, the integration and the Lambda permission to core's API.)
-#
-# module "engine" {
-#   source = "../../engine/terraform"
-#
-#   name_prefix = var.name_prefix
-#   owner_email = var.owner_email
-#   dry_run     = var.dry_run
-#
-#   table_names              = module.platform_core.table_names
-#   table_arns               = module.platform_core.table_arns
-#   notify_function_arn      = module.platform_core.notify_function_arn
-#   notify_function_name     = module.platform_core.notify_function_name
-#   team_topic_arn           = module.platform_core.team_topic_arn
-#   action_api_id            = module.platform_core.action_api_id
-#   action_api_execution_arn = module.platform_core.action_api_execution_arn
-#   dev_scope                = local.dev_scope
-# }
+# (Engine adds the /action routes, the integration and the Lambda permission to core's API, task #31.)
+
+module "engine" {
+  source = "../../engine/terraform"
+
+  name_prefix = var.name_prefix
+  owner_email = var.owner_email
+  dry_run     = var.dry_run
+
+  table_names              = module.platform_core.table_names
+  table_arns               = module.platform_core.table_arns
+  notify_function_arn      = module.platform_core.notify_function_arn
+  notify_function_name     = module.platform_core.notify_function_name
+  team_topic_arn           = module.platform_core.team_topic_arn
+  action_api_id            = module.platform_core.action_api_id
+  action_api_execution_arn = module.platform_core.action_api_execution_arn
+  dev_scope                = local.dev_scope
+
+  timeline_waits           = var.timeline_waits
+  postpone_seconds         = var.postpone_seconds
+  detection_window_minutes = var.detection_window_minutes
+}
 
 # --- Lane B: scanner ---------------------------------------------------------
 # Outputs (§8): scanner_function_arn.
@@ -74,8 +78,8 @@ module "scanner" {
 
   table_names          = module.platform_core.table_names
   table_arns           = module.platform_core.table_arns
-  ec2_sfn_arn          = "" # until engine #17: module.engine.ec2_sfn_arn
-  ebs_sfn_arn          = "" # until engine #17: module.engine.ebs_sfn_arn
+  ec2_sfn_arn          = module.engine.ec2_sfn_arn
+  ebs_sfn_arn          = module.engine.ebs_sfn_arn # null until engine #30
   notify_function_name = module.platform_core.notify_function_name
   scan_regions         = var.scan_regions
   dev_scope            = local.dev_scope

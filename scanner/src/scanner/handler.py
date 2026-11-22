@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 
-from common import timeline
-from scanner import config, findings, metrics, pricing
+from common import idle, timeline
+from scanner import config, findings, pricing
 
 TIMELINE_TYPES = ("EC2_IDLE", "EBS_UNATTACHED")
 REQUIRED_TAGS = ("owner", "project")
@@ -160,8 +160,8 @@ def _scan_instances(scan, ec2, cloudwatch, instances, scope):
         if inst["State"]["Name"] != "running" or inst["LaunchTime"] > start:
             continue  # stopped instances send no CPU data; too new to judge over the window
         volumes = [m["Ebs"]["VolumeId"] for m in inst.get("BlockDeviceMappings", []) if "Ebs" in m]
-        signals = metrics.instance_signals(cloudwatch, iid, volumes, start, scan.now)
-        classification = metrics.classify(signals, window)
+        signals = idle.instance_signals(cloudwatch, iid, volumes, start, scan.now)
+        classification = idle.classify(signals, window)
         findings.log(iid, "EC2_IDLE", "classify", classification or "active", **signals)
         if classification != "idle":
             continue

@@ -6,8 +6,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from common import timeline
-from scanner import config, findings, handler, metrics
+from common import idle, timeline
+from scanner import config, findings, handler
 
 REGION = "us-west-2"
 TABLE = "cg-test-findings"
@@ -126,7 +126,7 @@ def test_idle_instance_creates_ec2_idle_finding(aws):
     ((1.0,), 1000.0, 10.0, "idle"),
     ((1.0,) * 9 + (30.0,), 1000.0, 10.0, "periodic"),  # avg 3.9 %, max 30 %
     ((1.0,), 5 * 1024 * 1024, 10.0, "underused"),      # 5 MB in 30 min > 1 MB
-    ((1.0,), 1000.0, 500.0, "underused"),               # 500 ops in 30 min > 50
+    ((1.0,), 1000.0, 5000.0, "underused"),              # 5000 ops in 30 min > 1800
     ((50.0,), 1000.0, 10.0, None),                      # busy
 ])
 def test_classifications(aws, capsys, cpu, network, disk, expected):
@@ -147,10 +147,12 @@ def test_classifications(aws, capsys, cpu, network, disk, expected):
 def test_classify_thresholds_scale_with_window():
     base = {"cpuAvg": 1.0, "cpuMax": 2.0, "networkBytes": 0.0, "diskOps": 0.0}
     one_day = 1440
-    assert metrics.classify(dict(base, networkBytes=40 * 1024 * 1024), one_day) == "idle"  # < 48 MB
-    assert metrics.classify(dict(base, networkBytes=40 * 1024 * 1024), 30) == "underused"
-    assert metrics.classify(dict(base, diskOps=2000), one_day) == "idle"  # < 2400
-    assert metrics.classify(dict(base, cpuAvg=None, cpuMax=None), 30) is None
+    assert idle.classify(dict(base, networkBytes=40 * 1024 * 1024), one_day) == "idle"  # < 48 MB
+    assert idle.classify(dict(base, networkBytes=40 * 1024 * 1024), 30) == "underused"
+    assert idle.classify(dict(base, diskOps=80000), one_day) == "idle"  # < 86400
+    assert idle.classify(dict(base, diskOps=80000), 30) == "underused"  # > 1800
+    assert idle.classify(dict(base, diskOps=914), 30) == "idle"  # the Nov 22 live-test instance
+    assert idle.classify(dict(base, cpuAvg=None, cpuMax=None), 30) is None
 
 
 def test_no_cpu_data_is_not_idle(aws):

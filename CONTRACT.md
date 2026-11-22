@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.4 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.5 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -58,7 +58,7 @@ Attributes:
 | `project` | S | scanner | absent if unknown |
 | `name` | S | scanner | the resource's `Name` tag, if any (untrusted text) |
 | `status` | S | see §3.2 | `open` \| `in_progress` \| `remediated` \| `resolved` \| `failed` |
-| `reportOnlyReason` | S | scanner, action | `protected` \| `autoscaling` \| absent |
+| `reportOnlyReason` | S | scanner, action, engine workflow (re-check) | `protected` \| `autoscaling` \| absent |
 | `classification` | S | scanner | EC2 only: `idle` \| `underused` \| `periodic` |
 | `estimatedMonthlyCost` | N | scanner | absent for `MISSING_TAGS` |
 | `missingTags` | L | scanner | `MISSING_TAGS` only, e.g. `["owner","project"]` |
@@ -96,12 +96,12 @@ Attributes:
 |---|---|---|
 | → `open` | scanner | new finding, or reopen of a `resolved` one (a reopen sets a new `firstSeenAt`, so "cost so far" counts the current episode only) |
 | `open` → `in_progress` | scanner via `timeline.start_timeline` | only `EC2_IDLE` / `EBS_UNATTACHED`, not report-only |
-| `open` / `in_progress` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present. **Never applies to `remediated` findings** (see below). |
+| `open` / `in_progress` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present; or the workflow's `STOP_INSTANCE` found the instance already stopped by someone else (not dry-run). **Never applies to `remediated` findings** (see below). |
 | `in_progress` → `remediated` | engine workflow | after stop, or snapshot + delete; also in dry-run, with `dryRun = true` |
 | `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep`, `errorMessage` |
 | `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it |
 | **`remediated` → `resolved`** | scanner | **EC2 only**, in exactly two cases: (a) instance `state = running` **and** `LaunchTime > remediatedAt` (someone really started it again); (b) the instance no longer exists or is `terminated`. |
-| any → report-only | scanner (protect / autoscaling tag found), action Lambda (Protect) | scanner: `open` → set `reportOnlyReason`; `in_progress` / `failed` → `timeline.stop_timeline(id, type, "open", reason)`; `remediated` → unchanged. Action Lambda (Protect) as before: stop timeline, set `reportOnlyReason`, status `open` |
+| any → report-only | scanner (protect / autoscaling tag found), action Lambda (Protect), engine workflow (re-check) | scanner: `open` → set `reportOnlyReason`; `in_progress` / `failed` → `timeline.stop_timeline(id, type, "open", reason)`; `remediated` → unchanged. Action Lambda (Protect) as before: stop timeline, set `reportOnlyReason`, status `open`. Engine workflow re-check finds the protect tag → status `open`, `reportOnlyReason` `protected` |
 | report-only → normal | scanner | tag removed while status is `open`: REMOVE `reportOnlyReason`; the timeline starts on the same scan |
 | postpone | action Lambda via `timeline` | stays `in_progress`, generation + 1, `postponeCount` + 1 |
 
@@ -202,9 +202,10 @@ Input (one format for every email):
   - For each finding with non-empty `actions`, Notify creates one token per action (§3.4) and makes the URLs available to
     the template as `links["<resourceId>#<findingType>"]["<action>"]`.
   - Token writes go in batches of at most **25** (DynamoDB `BatchWriteItem` limit).
-  - `actions` rules: `protect` / `postpone` only for `in_progress` `EC2_IDLE` / `EBS_UNATTACHED` findings;
-    `restore` only on `DELETE_CONFIRMATION` (non-dry-run). Everything else (`EIP_*`, `MISSING_TAGS`,
-    `SNAPSHOT_REMINDER`, report-only, dry-run) gets `actions: []`. `expiresAt` is required when `actions` is non-empty.
+  - `actions` rules: `protect` / `postpone` only for `in_progress` `EC2_IDLE` / `EBS_UNATTACHED` findings,
+    also on dry-run timelines (reversible, needed for testing); `restore` only on a non-dry-run
+    `DELETE_CONFIRMATION`. Everything else (`EIP_*`, `MISSING_TAGS`, `SNAPSHOT_REMINDER`, report-only,
+    dry-run `DELETE_CONFIRMATION`) gets `actions: []`. `expiresAt` is required when `actions` is non-empty.
 - Output: `{ "sent": true, "recipient": "...", "fallback": false, "messageId": "...", "tokensCreated": 2 }`.
 - Errors are raised (so Step Functions retries), not swallowed.
 - Notify's role: `ses:SendEmail` (verified sender only), `dynamodb:BatchWriteItem` / `PutItem` on tokens,
@@ -242,6 +243,10 @@ Input: `{ "action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": 
 | `CREATE_SNAPSHOT` | — | `{ "snapshotId": "snap-...", "dryRun": bool }` |
 | `SNAPSHOT_STATUS` | `snapshotId` | `{ "state": "pending" \| "completed" \| "error" }` |
 | `DELETE_VOLUME` | `snapshotId` | `{ "deleted": bool, "dryRun": bool }` |
+
+Dry-run: `CREATE_SNAPSHOT` returns `snapshotId: null`; `DELETE_VOLUME` skips the snapshot check. `STOP_INSTANCE` on an
+instance that is already stopped returns `stopped: false, dryRun: false` (someone else stopped it; the workflow resolves
+the finding).
 
 ### 4.4 Step Functions input (both state machines)
 ```json
@@ -306,7 +311,7 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `DRY_RUN` | engine, scanner (tag copying) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
 | `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed |
-| `DETECTION_WINDOW_MINUTES` | scanner | `30` (demo) / `1440` |
+| `DETECTION_WINDOW_MINUTES` | scanner, engine (remediation `CHECK_EC2`) | `30` (demo) / `1440` |
 | `EC2_SFN_ARN`, `EBS_SFN_ARN` | `common/timeline.py` | |
 | `WAIT_BEFORE_FINAL_SECONDS_EC2`, `WAIT_BEFORE_ACTION_SECONDS_EC2`, same for `_EBS` | scanner, action (passed into workflow input) | `120` |
 | `POSTPONE_SECONDS` | action | `604800` (7 days); minutes in tests |
@@ -318,7 +323,8 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `MAX_POSTPONES`, `MAX_RESTARTS` | action, timeline | `2`, `2` |
 | `EIP_STOPPED_THRESHOLD_HOURS` | scanner | `24` |
 
-Thresholds (CPU / network / disk) live in `scanner/` config with the values decided by the team (design §24).
+Thresholds (CPU / network / disk) and the idle classification live in `common/idle.py` (used by the scanner and the
+remediation re-check), with the values decided by the team (design §24).
 
 ## 7. Who reads whose data
 
@@ -344,7 +350,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 | Module | Inputs (besides `name_prefix`, `owner_email`, `dry_run`) | Outputs |
 |---|---|---|
 | `platform/terraform/core` | `team_email`, `sender_email` | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
-| `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
+| `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
 | `dashboard/terraform` | `table_names`, `table_arns`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_password` (sensitive) | `dashboard_url` |
@@ -381,3 +387,9 @@ budget amounts · Bedrock model, cap and answer length.
   timelineStep only for findings that had a timeline.
 - v2.4 — §3.2 report-only rules for in_progress/failed/remediated and tag removal; §6
   EIP_STOPPED_THRESHOLD_HOURS; §8 timing inputs for scanner and engine.
+- v2.5 — §8 engine takes `detection_window_minutes` and §6 `DETECTION_WINDOW_MINUTES` is also used by the engine
+  (`CHECK_EC2` re-checks over the same window); idle thresholds and classification moved to `common/idle.py`.
+  §3.1 / §3.2: the workflow re-check sets report-only (protect tag → `open`, `reportOnlyReason` `protected`), and a
+  `STOP_INSTANCE` that finds the instance already stopped by someone else (not dry-run) resolves the finding.
+  §4.1: protect / postpone links also on dry-run timelines. §4.3: dry-run outputs of `CREATE_SNAPSHOT` /
+  `DELETE_VOLUME` and the already-stopped `STOP_INSTANCE` result.

@@ -1,16 +1,11 @@
-"""Scanner settings: detection thresholds (initial values, design §8.2 / §24) and environment readers."""
+"""Scanner settings: environment readers (idle thresholds: common/idle.py, design §8.2 / §24)."""
 
 import os
 
-# --- EC2 idle thresholds, per hour, scaled to the detection window -----------------------------------
-CPU_AVG_PERCENT = 5.0  # CPU average below this is "low"
-CPU_MAX_PERCENT = 20.0  # CPU maximum at or above this is a spike (periodic)
-NETWORK_BYTES_PER_HOUR = 2 * 1024 * 1024  # NetworkIn + NetworkOut, 2 MB per hour
-DISK_OPS_PER_HOUR = 100  # VolumeReadOps + VolumeWriteOps over all attached volumes
+from common import idle
 
-METRIC_PERIOD_SECONDS = 300  # basic monitoring granularity
-
-DEFAULT_DETECTION_WINDOW_MINUTES = 30  # demo value; the real tool uses e.g. 1440
+# EC2 idle thresholds and classify() live in common/idle.py (shared with the remediation re-check).
+DEFAULT_DETECTION_WINDOW_MINUTES = idle.DEFAULT_DETECTION_WINDOW_MINUTES
 DEFAULT_EIP_STOPPED_THRESHOLD_HOURS = 24
 DEFAULT_REGION = "us-west-2"
 
