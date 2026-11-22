@@ -96,3 +96,39 @@ variable "dashboard_password" {
     error_message = "dashboard_password still has the placeholder from terraform.tfvars.example; generate a random value."
   }
 }
+
+# --- Timing (CONTRACT §8: variables of infra/stack, passed to scanner and engine) ---------------------
+
+variable "timeline_waits" {
+  description = "Workflow waits in seconds (CONTRACT §4.4; defaults EC2 2 d + 1 d, EBS 11 d + 3 d). Minutes for dev / demo"
+  type = object({
+    ec2_before_final  = number
+    ec2_before_action = number
+    ebs_before_final  = number
+    ebs_before_action = number
+  })
+  default = {
+    ec2_before_final  = 172800
+    ec2_before_action = 86400
+    ebs_before_final  = 950400
+    ebs_before_action = 259200
+  }
+}
+
+variable "detection_window_minutes" {
+  description = "EC2 idle detection window (DETECTION_WINDOW_MINUTES): 30 for the demo, e.g. 1440 for real use"
+  type        = number
+  default     = 30
+}
+
+variable "eip_stopped_threshold_hours" {
+  description = "Report an Elastic IP on a stopped instance after this many hours stopped (EIP_STOPPED_THRESHOLD_HOURS)"
+  type        = number
+  default     = 24
+}
+
+variable "postpone_seconds" {
+  description = "Postpone link: beforeFinalSeconds of the next generation (POSTPONE_SECONDS; engine, task #17)"
+  type        = number
+  default     = 604800
+}

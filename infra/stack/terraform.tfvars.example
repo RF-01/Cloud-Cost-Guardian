@@ -18,3 +18,14 @@ bedrock_model_id = ""
 # At least 16 characters each; generate random values, never reuse real passwords.
 origin_secret      = "CHANGE-ME-origin-secret-32-chars"
 dashboard_password = "CHANGE-ME-dashboard-password-32c"
+
+# Timing (CONTRACT §8). Defaults are the real values; use minutes for personal / demo stacks, e.g. 300.
+timeline_waits = {
+  ec2_before_final  = 172800
+  ec2_before_action = 86400
+  ebs_before_final  = 950400
+  ebs_before_action = 259200
+}
+detection_window_minutes    = 30
+eip_stopped_threshold_hours = 24
+postpone_seconds            = 604800

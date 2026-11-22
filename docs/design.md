@@ -318,7 +318,7 @@ Classification:
 
 - `DescribeAddresses`.
 - **Unassociated:** no `AssociationId`.
-- **Associated with a stopped instance:** billed but serving nothing. Reported only after the instance has been stopped longer than a set threshold (using `firstSeenAt`).
+- **Associated with a stopped instance:** billed but serving nothing. Reported only after the instance has been stopped longer than a set threshold (the stop time is read from the instance's StateTransitionReason).
 
 ### 8.5 Instances the Guardian must not stop
 

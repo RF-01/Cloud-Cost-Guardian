@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.3 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.4 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -101,7 +101,8 @@ Attributes:
 | `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep`, `errorMessage` |
 | `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it |
 | **`remediated` → `resolved`** | scanner | **EC2 only**, in exactly two cases: (a) instance `state = running` **and** `LaunchTime > remediatedAt` (someone really started it again); (b) the instance no longer exists or is `terminated`. |
-| any → report-only | action Lambda (Protect), scanner (protect tag found) | stop timeline, set `reportOnlyReason`, status `open` |
+| any → report-only | scanner (protect / autoscaling tag found), action Lambda (Protect) | scanner: `open` → set `reportOnlyReason`; `in_progress` / `failed` → `timeline.stop_timeline(id, type, "open", reason)`; `remediated` → unchanged. Action Lambda (Protect) as before: stop timeline, set `reportOnlyReason`, status `open` |
+| report-only → normal | scanner | tag removed while status is `open`: REMOVE `reportOnlyReason`; the timeline starts on the same scan |
 | postpone | action Lambda via `timeline` | stays `in_progress`, generation + 1, `postponeCount` + 1 |
 
 Rules that prevent loops:
@@ -315,6 +316,7 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `RESTORE_LINK_DAYS` | engine (sets restore `expiresAt`) | `30` |
 | `BEDROCK_MODEL_ID`, `BEDROCK_DAILY_CAP`, `BEDROCK_MAX_TOKENS` | digest, dashboard | |
 | `MAX_POSTPONES`, `MAX_RESTARTS` | action, timeline | `2`, `2` |
+| `EIP_STOPPED_THRESHOLD_HOURS` | scanner | `24` |
 
 Thresholds (CPU / network / disk) live in `scanner/` config with the values decided by the team (design §24).
 
@@ -342,11 +344,13 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 | Module | Inputs (besides `name_prefix`, `owner_email`, `dry_run`) | Outputs |
 |---|---|---|
 | `platform/terraform/core` | `team_email`, `sender_email` | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
-| `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
-| `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope` | `scanner_function_arn` |
+| `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
+| `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
 | `dashboard/terraform` | `table_names`, `table_arns`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_password` (sensitive) | `dashboard_url` |
 
+- `timeline_waits` = object {ec2_before_final, ec2_before_action, ebs_before_final, ebs_before_action} in seconds (defaults §4.4);
+  these and `detection_window_minutes`, `eip_stopped_threshold_hours`, `postpone_seconds` are variables of infra/stack.
 - `origin_secret` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
@@ -375,3 +379,5 @@ budget amounts · Bedrock model, cap and answer length.
 - v2.3 — §4.5: start_timeline returns {result, finding}, checks status per reason, postpone stops the
   current execution and owns postponeCount (§3.1), new generations clear stale fields; stop_timeline sets
   timelineStep only for findings that had a timeline.
+- v2.4 — §3.2 report-only rules for in_progress/failed/remediated and tag removal; §6
+  EIP_STOPPED_THRESHOLD_HOURS; §8 timing inputs for scanner and engine.

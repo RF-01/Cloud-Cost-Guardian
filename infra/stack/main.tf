@@ -64,22 +64,26 @@ module "platform_core" {
 
 # --- Lane B: scanner ---------------------------------------------------------
 # Outputs (§8): scanner_function_arn.
-#
-# module "scanner" {
-#   source = "../../scanner/terraform"
-#
-#   name_prefix = var.name_prefix
-#   owner_email = var.owner_email
-#   dry_run     = var.dry_run
-#
-#   table_names          = module.platform_core.table_names
-#   table_arns           = module.platform_core.table_arns
-#   ec2_sfn_arn          = module.engine.ec2_sfn_arn
-#   ebs_sfn_arn          = module.engine.ebs_sfn_arn
-#   notify_function_name = module.platform_core.notify_function_name
-#   scan_regions         = var.scan_regions
-#   dev_scope            = local.dev_scope
-# }
+
+module "scanner" {
+  source = "../../scanner/terraform"
+
+  name_prefix = var.name_prefix
+  owner_email = var.owner_email
+  dry_run     = var.dry_run
+
+  table_names          = module.platform_core.table_names
+  table_arns           = module.platform_core.table_arns
+  ec2_sfn_arn          = "" # until engine #17: module.engine.ec2_sfn_arn
+  ebs_sfn_arn          = "" # until engine #17: module.engine.ebs_sfn_arn
+  notify_function_name = module.platform_core.notify_function_name
+  scan_regions         = var.scan_regions
+  dev_scope            = local.dev_scope
+
+  timeline_waits              = var.timeline_waits
+  detection_window_minutes    = var.detection_window_minutes
+  eip_stopped_threshold_hours = var.eip_stopped_threshold_hours
+}
 
 # --- Lane D: dashboard -------------------------------------------------------
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
