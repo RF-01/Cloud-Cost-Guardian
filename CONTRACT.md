@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.6 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.7 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -98,7 +98,7 @@ Attributes:
 | `open` → `in_progress` | scanner via `timeline.start_timeline` | only `EC2_IDLE` / `EBS_UNATTACHED`, not report-only |
 | `open` / `in_progress` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present; or the workflow's `STOP_INSTANCE` found the instance already stopped by someone else (not dry-run). **Never applies to `remediated` findings** (see below). |
 | `in_progress` → `remediated` | engine workflow | after stop, or snapshot + delete; also in dry-run, with `dryRun = true` |
-| `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep`, `errorMessage` |
+| `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep` (the workflow state's name), `errorMessage` (≤ 500 chars), `timelineStep = done`; only with the same generation and status `in_progress`. A failure after the finding left `in_progress` (the `STOP_CONFIRMATION` email) only writes a `workflow_failed` audit entry and fails the execution; the status is unchanged. |
 | `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it |
 | **`remediated` → `resolved`** | scanner | **EC2 only**, in exactly two cases: (a) instance `state = running` **and** `LaunchTime > remediatedAt` (someone really started it again); (b) the instance no longer exists or is `terminated`. |
 | any → report-only | scanner (protect / autoscaling tag found), action Lambda (Protect), engine workflow (re-check) | scanner: `open` → set `reportOnlyReason`; `in_progress` / `failed` → `timeline.stop_timeline(id, type, "open", reason)`; `remediated` → unchanged. Action Lambda (Protect) as before: stop timeline, set `reportOnlyReason`, status `open`. Engine workflow re-check finds the protect tag → status `open`, `reportOnlyReason` `protected` |
@@ -127,6 +127,8 @@ GSI `byDay`: **`day`** (S) + **`ts`** (S) — for the dashboard's activity view.
 | `dryRun` | BOOL | for actions |
 | `result` | S | `ok` \| `error` \| `skipped` |
 | `details` | M | free-form, small |
+
+`workflow_failed` details: `failedStep`, `errorMessage`, `progress`, `executionName`.
 
 ### 3.4 `<prefix>tokens` (action links, design §10.4)
 Key: **`tokenHash`** (S, hex SHA-256 of the raw token). TTL on `ttl`.
@@ -409,3 +411,5 @@ budget amounts · Bedrock model, cap and answer length.
 - v2.6 — §4.1: SES v2 send and MessageRejected fallback with new tokens, DRY_RUN doesn't suppress
   emails, Notify writes notice_sent / final_warning_sent, post-send write failures are not raised, null money
   values allowed, Notify role scoped by ses:FromAddress and dynamodb:Attributes; §4.2 elasticIps tolerance.
+- v2.7 — §3.2 Catch rules (failedStep / errorMessage, condition, failure after remediation); §3.3
+  workflow_failed details.

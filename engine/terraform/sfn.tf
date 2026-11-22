@@ -57,11 +57,38 @@ locals {
       JitterStrategy  = "FULL"
     }])
 
-    # The only Catch until task #19: the finding moved on, so this execution ends quietly.
-    superseded_catch = jsonencode([{
-      ErrorEquals = ["DynamoDB.ConditionalCheckFailedException"]
-      Next        = "Superseded"
-    }])
+  }
+
+  # ---- Failure branch (design §9.1 "Catch step"), shared with the EBS timeline (#30). -----------------------
+  # Every timeline catcher Assigns failedStep, progress, error and errorMessage, so each state of the branch
+  # (MarkFailed, WriteFailureAudit, NotifyFailure, ConfirmationFailed, Failed) only reads variables.
+  failure_parts = {
+    audit_table = var.table_names["audit"]
+
+    # "<Error>: <message>", at most 500 chars, from $states.errorOutput. Lambda errors: the errorMessage inside
+    # the JSON Cause, found with $match (never $parse: nothing in the failure path may throw). The regex spells
+    # the backslash as \x5c because the JSONata lexer miscounts brackets after "\]".
+    error_message = jsonencode("{% ${trimspace(file("${path.module}/failure_error_message.jsonata"))} %}")
+
+    # workflow_failed audit entry (CONTRACT §3.3). Used by WriteFailureAudit and ConfirmationFailed.
+    failure_audit_item = jsonencode({
+      resourceId  = { S = "{% $input.resourceId %}" }
+      ts          = { S = "{% $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') & '#' & $substring($uuid(), 0, 8) %}" }
+      day         = { S = "{% $fromMillis($millis(), '[Y0001]-[M01]-[D01]') %}" }
+      actor       = { S = "workflow" }
+      event       = { S = "workflow_failed" }
+      findingType = { S = "{% $input.findingType %}" }
+      region      = { S = "{% $input.region %}" }
+      generation  = { N = "{% $string($input.generation) %}" }
+      dryRun      = { BOOL = "{% $input.dryRun = true %}" }
+      result      = { S = "error" }
+      details = { M = {
+        failedStep    = { S = "{% $failedStep %}" }
+        errorMessage  = { S = "{% $errorMessage %}" }
+        progress      = { S = "{% $progress %}" }
+        executionName = { S = "{% $states.context.Execution.Name %}" }
+      } }
+    })
   }
 }
 
@@ -99,6 +126,12 @@ data "aws_iam_policy_document" "ec2_timeline" {
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.table_arns["findings"]]
   }
+
+  statement {
+    sid       = "WriteFailureAudit"
+    actions   = ["dynamodb:PutItem"]
+    resources = [var.table_arns["audit"]]
+  }
 }
 
 resource "aws_iam_role_policy" "ec2_timeline" {
@@ -111,7 +144,7 @@ resource "aws_sfn_state_machine" "ec2_timeline" {
   name       = "${var.name_prefix}ec2-timeline"
   type       = "STANDARD"
   role_arn   = aws_iam_role.ec2_timeline.arn
-  definition = templatefile("${path.module}/ec2_timeline.asl.json", local.ec2_timeline_parts)
+  definition = templatefile("${path.module}/ec2_timeline.asl.json", merge(local.ec2_timeline_parts, local.failure_parts))
 
   depends_on = [aws_iam_role_policy.ec2_timeline]
 }

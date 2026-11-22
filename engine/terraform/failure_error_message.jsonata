@@ -1,0 +1,8 @@
+(
+  $e := $states.errorOutput;
+  $name := ($type($e.Error) = 'string' and $e.Error != '') ? $e.Error : 'UnknownError';
+  $cause := $type($e.Cause) = 'string' ? $e.Cause : '';
+  $found := $match($cause, /"errorMessage"\s*:\s*"((?:[^"\x5c]|\x5c.)*)"/, 1);
+  $text := $exists($found.groups[0]) ? $replace($replace($found.groups[0], '\\"', '"'), '\\n', ' ') : $cause;
+  $substring($text = '' ? $name : $name & ': ' & $text, 0, 500)
+)

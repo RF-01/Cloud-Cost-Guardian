@@ -1,5 +1,5 @@
 {
-  "Comment": "EC2 idle timeline (design 9.2). Input: CONTRACT 4.4. Every findings update is conditional on generation = input generation AND status = in_progress; a failed condition (postpone, restart, protect, scanner resolve) ends the execution quietly. No failure Catch yet (task #19).",
+  "Comment": "EC2 idle timeline (design 9.2). Input: CONTRACT 4.4. Every findings update is conditional on generation = input generation AND status = in_progress; a failed condition (postpone, restart, protect, scanner resolve) ends the execution quietly. Any other error (after retries) goes to the failure branch (design 9.1, CONTRACT 3.2): MarkFailed -> WriteFailureAudit -> NotifyFailure -> Failed; a StopConfirmation error (finding already remediated) goes to ConfirmationFailed -> Failed. Each catcher Assigns failedStep, progress, error, errorMessage.",
   "QueryLanguage": "JSONata",
   "TimeoutSeconds": 2592000,
   "StartAt": "SetDeadline",
@@ -30,7 +30,20 @@
         "cost": "{% $type($states.input.estimatedMonthlyCost) = 'number' ? $round($states.input.estimatedMonthlyCost, 2) : null %}"
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "SetDeadline",
+            "progress": "No action was taken on the instance; the first notice may not have been sent.",
+            "input": "{% $states.input %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "FirstNotice"
     },
     "FirstNotice": {
@@ -63,6 +76,18 @@
         }
       },
       "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "FirstNotice",
+            "progress": "No action was taken on the instance; the first notice may not have been sent.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StepWaiting"
     },
     "StepWaiting": {
@@ -81,7 +106,19 @@
         }
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepWaiting",
+            "progress": "The first notice was sent; the instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "WaitBeforeFinal"
     },
     "WaitBeforeFinal": {
@@ -99,6 +136,18 @@
       },
       "Output": "{% $states.result.Payload %}",
       "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "RecheckBeforeFinal",
+            "progress": "The first notice was sent; the instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StillIdleBeforeFinal"
     },
     "StillIdleBeforeFinal": {
@@ -131,7 +180,19 @@
         }
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepFinalWarning",
+            "progress": "The first notice was sent; the instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "FinalWarning"
     },
     "FinalWarning": {
@@ -164,6 +225,18 @@
         }
       },
       "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "FinalWarning",
+            "progress": "The first notice was sent; the final warning may not have been sent. The instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "WaitBeforeAction"
     },
     "WaitBeforeAction": {
@@ -181,6 +254,18 @@
       },
       "Output": "{% $states.result.Payload %}",
       "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "RecheckBeforeAction",
+            "progress": "The first notice and the final warning were sent; the instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StillIdleBeforeAction"
     },
     "StillIdleBeforeAction": {
@@ -213,7 +298,19 @@
         }
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepActing",
+            "progress": "The first notice and the final warning were sent; the instance was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StopInstance"
     },
     "StopInstance": {
@@ -233,6 +330,18 @@
         "stop": "{% $states.result.Payload %}"
       },
       "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StopInstance",
+            "progress": "{% $input.dryRun = true ? 'Dry run: nothing was changed.' : 'The stop request failed or its result is unknown; check the instance state in the console.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StoppedByGuardian"
     },
     "StoppedByGuardian": {
@@ -258,7 +367,19 @@
         "ExpressionAttributeValues": "{% $merge([{':remediated': {'S': 'remediated'}, ':now': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, ':dryRun': {'BOOL': $stop.dryRun}, ':done': {'S': 'done'}, ':gen': {'N': $string($input.generation)}, ':inProgress': {'S': 'in_progress'}}, $cost != null ? {':savings': {'N': $string($cost)}} : {}]) %}"
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkRemediated",
+            "progress": "{% $stop.dryRun = true ? 'Dry run: the stop was only simulated (nothing was changed); the finding could not be marked remediated.' : 'The instance was stopped; the finding could not be marked remediated.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "StopConfirmation"
     },
     "StopConfirmation": {
@@ -288,6 +409,18 @@
         }
       },
       "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StopConfirmation",
+            "progress": "The instance was stopped (or dry run) and the finding marked remediated; only the confirmation email failed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "ConfirmationFailed"
+        }
+      ],
       "Next": "Remediated"
     },
     "Remediated": {
@@ -311,7 +444,19 @@
         }
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkResolved",
+            "progress": "Nothing was changed by the Guardian (the instance was active again, or someone else had stopped it); the finding could not be marked resolved.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "Resolved"
     },
     "Resolved": {
@@ -335,7 +480,19 @@
         }
       },
       "Retry": ${ddb_retry},
-      "Catch": ${superseded_catch},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkProtected",
+            "progress": "The instance is tagged guardian:protect=true and was not changed; the finding could not be marked report-only.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
       "Next": "Protected"
     },
     "Protected": {
@@ -345,6 +502,100 @@
     "Superseded": {
       "Type": "Succeed",
       "Comment": "The finding moved on (new generation, protected, resolved by the scanner): this execution must not write anything."
+    },
+    "MarkFailed": {
+      "Type": "Task",
+      "Comment": "Failure branch step 1. Only while this generation is still in_progress; if the finding moved on, end quietly (no email).",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :failed, failedStep = :failedStep, errorMessage = :errorMessage, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":failed": { "S": "failed" },
+          ":failedStep": { "S": "{% $failedStep %}" },
+          ":errorMessage": { "S": "{% $errorMessage %}" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "WriteFailureAudit"
+    },
+    "WriteFailureAudit": {
+      "Type": "Task",
+      "Comment": "Failure branch step 2: workflow_failed audit entry (CONTRACT 3.3). An error here must not stop the owner email.",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "${audit_table}",
+        "Item": ${failure_audit_item}
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "NotifyFailure" }
+      ],
+      "Next": "NotifyFailure"
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Comment": "Failure branch step 3: tell the owner nothing further will happen to the resource.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "WORKFLOW_FAILED",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": []
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "region": "{% $input.region %}",
+            "findingType": "{% $input.findingType %}",
+            "failedStep": "{% $failedStep %}",
+            "errorMessage": "{% $errorMessage %}",
+            "progress": "{% $progress %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "Failed"
+    },
+    "ConfirmationFailed": {
+      "Type": "Task",
+      "Comment": "StopConfirmation failed after the finding became remediated: audit only. No status change, no owner email (Notify is what failed).",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "${audit_table}",
+        "Item": ${failure_audit_item}
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Comment": "Failure branch step 5: counts in ExecutionsFailed (workflow alarms, #32).",
+      "Error": "WorkflowFailed",
+      "Cause": "{% $failedStep & ': ' & $errorMessage %}"
     }
   }
 }
