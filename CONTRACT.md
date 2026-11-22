@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.5 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.6 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -197,6 +197,15 @@ Input (one format for every email):
 ```
 - `to`: email or `null` → team address. Unverified / failed → falls back to the team address and writes an
   `email_fallback` audit entry.
+  - Sent with SES v2 SendEmail (HTML + text). If SES rejects the recipient (`MessageRejected`, e.g. unverified in
+    the sandbox), Notify rebuilds the email for the team address with new tokens and writes `email_fallback`
+    (one per finding). A null `to` goes to the team address without a fallback entry. Any other send error, or a
+    failure sending to the team address, is raised.
+  - `DRY_RUN` does not suppress emails; templates show the dry-run state from `vars.dryRun`.
+  - After the send, Notify writes `notice_sent` (FIRST_NOTICE) / `final_warning_sent` (FINAL_WARNING) audit entries,
+    one per finding. Failures of post-send writes (audit, `lastNotifiedAt`) are logged, not raised, so a retry never
+    resends the email.
+  - Required variables (§4.2) must be present; money values may be null ("not estimated yet").
 - `findings`: every finding this email is about (one for most templates, many for `DIGEST` and `MISSING_TAGS_GROUPED`).
   - Notify sets **`lastNotifiedAt`** on **every** listed finding after a successful send.
   - For each finding with non-empty `actions`, Notify creates one token per action (§3.4) and makes the URLs available to
@@ -208,8 +217,9 @@ Input (one format for every email):
     dry-run `DELETE_CONFIRMATION`) gets `actions: []`. `expiresAt` is required when `actions` is non-empty.
 - Output: `{ "sent": true, "recipient": "...", "fallback": false, "messageId": "...", "tokensCreated": 2 }`.
 - Errors are raised (so Step Functions retries), not swallowed.
-- Notify's role: `ses:SendEmail` (verified sender only), `dynamodb:BatchWriteItem` / `PutItem` on tokens,
-  `dynamodb:UpdateItem` on findings (only `lastNotifiedAt`), `PutItem` on audit.
+- Notify's role: `ses:SendEmail` on `identity/*` in us-west-2 with condition `ses:FromAddress` = sender (the
+  sandbox also checks recipient identities), `dynamodb:BatchWriteItem` / `PutItem` on tokens, `dynamodb:UpdateItem`
+  on findings limited to `lastNotifiedAt` (condition `dynamodb:Attributes`), `PutItem` on audit.
 
 ### 4.2 Email templates and their variables
 
@@ -227,6 +237,9 @@ R = required, O = optional. Every template also gets `links` from Notify (§4.1)
 | `MISSING_TAGS_GROUPED` | scanner (once, when found) | R: `instanceId`, `region`, `resources` (list of `{resourceId, resourceType, missingTags}`) |
 | `RESTORE_DONE` | action Lambda | R: `sourceVolumeId`, `snapshotId`, `newVolumeId`, `availabilityZone`, `region` |
 | `DIGEST` | digest Lambda | R: `findings` (list, below), `protected` (list of `{resourceId, resourceType, region, estimatedMonthlyCost, name?}`), `snapshots` (list of `{snapshotId, sourceVolumeId, region, sizeGb, monthlyCost, ageDays}`), `budgetAlerts` (list of `{budgetName, thresholdType, threshold, receivedAt}`), `missingTags` (list of `{resourceId, resourceType, region, missingTags}`). O: `aiSummary` (empty if Bedrock failed) |
+
+Notify accepts `elasticIps` missing / null (= empty) or a single string (= one item), because JSONata may drop
+empty lists or unwrap one-item lists.
 
 `DIGEST` `findings` items: `{resourceId, findingType, resourceType, region, status, estimatedMonthlyCost, costSoFar,
 daysOpen, deadlineAt?, timelineStep?, reportOnlyReason?, name?}`. Every item also appears in the top-level `findings`
@@ -393,3 +406,6 @@ budget amounts · Bedrock model, cap and answer length.
   `STOP_INSTANCE` that finds the instance already stopped by someone else (not dry-run) resolves the finding.
   §4.1: protect / postpone links also on dry-run timelines. §4.3: dry-run outputs of `CREATE_SNAPSHOT` /
   `DELETE_VOLUME` and the already-stopped `STOP_INSTANCE` result.
+- v2.6 — §4.1: SES v2 send and MessageRejected fallback with new tokens, DRY_RUN doesn't suppress
+  emails, Notify writes notice_sent / final_warning_sent, post-send write failures are not raised, null money
+  values allowed, Notify role scoped by ses:FromAddress and dynamodb:Attributes; §4.2 elasticIps tolerance.

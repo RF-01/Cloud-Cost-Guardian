@@ -1,5 +1,5 @@
-# Notify Lambda — STUB until task #24: logs the event and returns {"sent": false, "stub": true}.
-# No SES or DynamoDB permissions yet (added with the real code in #24).
+# Notify Lambda (CONTRACT §4.1, §4.2, §3.4; design §10.4-10.5): renders the emails, creates the action-link
+# tokens, sends with SES v2, falls back to the team address, writes lastNotifiedAt and audit entries.
 
 locals {
   repo_root     = "${path.module}/../../.."
@@ -50,12 +50,62 @@ resource "aws_iam_role" "notify" {
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
-# Logs only, to its own log group (Terraform creates the group, so no logs:CreateLogGroup).
+# Least privilege (CONTRACT §4.1). Logs go to its own log group (Terraform creates it, so no logs:CreateLogGroup).
 data "aws_iam_policy_document" "notify" {
   statement {
     sid       = "OwnLogs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.notify.arn}:*"]
+  }
+
+  # In the SES sandbox IAM also checks the recipient identities, so the resource is identity/*; the condition
+  # pins the From address (a plain address, no display name, so it matches exactly). SES runs in us-west-2.
+  statement {
+    sid       = "SendFromSenderOnly"
+    actions   = ["ses:SendEmail"]
+    resources = ["arn:aws:ses:us-west-2:${data.aws_caller_identity.current.account_id}:identity/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ses:FromAddress"
+      values   = [var.sender_email]
+    }
+  }
+
+  statement {
+    sid       = "WriteTokens"
+    actions   = ["dynamodb:BatchWriteItem", "dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.tokens.arn]
+  }
+
+  statement {
+    sid       = "WriteAudit"
+    actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.audit.arn]
+  }
+
+  # Notify owns lastNotifiedAt and nothing else on findings (CONTRACT §3.1).
+  statement {
+    sid       = "SetLastNotifiedAt"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.findings.arn]
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:Attributes"
+      values   = ["resourceId", "findingType", "lastNotifiedAt"]
+    }
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "dynamodb:ReturnValues"
+      values   = ["NONE"]
+    }
+  }
+
+  # Failed async invocations go to the DLQ (design §6.1). AWS checks this permission when the DLQ is set,
+  # so it lives in this policy, which the function depends_on.
+  statement {
+    sid       = "DeadLetterQueue"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.dlq.arn]
   }
 }
 
@@ -74,6 +124,10 @@ resource "aws_lambda_function" "notify" {
   source_code_hash = data.archive_file.notify.output_base64sha256
   timeout          = 60 # design §17
   memory_size      = 128
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.dlq.arn
+  }
 
   environment {
     # CONTRACT §6; tables per Notify's needs in §4.1 (tokens, findings, audit).
