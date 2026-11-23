@@ -88,3 +88,5 @@ Shared folders:
 - Logs: one JSON line per important event (`resourceId`, `findingType`, `action`, `result`).
 - All times ISO 8601 UTC (`2026-11-20T16:30:00Z`). Money in USD per month, stored as DynamoDB numbers.
 - Follow `CONTRACT.md` exactly. If something you need is missing from it, stop and say what to add.
+- Write files with LF line endings (the repo enforces `eol=lf`). On Windows, Python writes must use `newline="\n"`;
+  CRLF in a working copy changes Lambda zip hashes and makes plans show spurious updates.
