@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.8 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.9 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -380,9 +380,9 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 
 ## 9. Open values (to fill in as the team decides — design §24)
 
-Detection thresholds · real detection window · Elastic IP "stopped too long" threshold · allowed instance types ·
+Detection thresholds · real detection window · Elastic IP "stopped too long" threshold ·
 budget amounts · Bedrock model, cap and answer length.
-(Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days.)
+(Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days, allowed instance types = t3.micro, t3.small (launch guardrails, `infra/shared`).)
 
 ## 10. Change log
 
@@ -415,3 +415,4 @@ budget amounts · Bedrock model, cap and answer length.
 - v2.7 — §3.2 Catch rules (failedStep / errorMessage, condition, failure after remediation); §3.3
   workflow_failed details.
 - v2.8 — §3.1 `estimatedSnapshotMonthlyCost`; what `estimatedMonthlyCost` covers per resource type.
+- v2.9 — §9: allowed instance types decided (t3.micro, t3.small; launch guardrails in `infra/shared`, #25).

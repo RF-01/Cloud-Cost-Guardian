@@ -40,7 +40,7 @@ data "aws_caller_identity" "current" {}
 
 # ---------------------------------------------------------------------------
 # Team group: every team member is an admin in this sandbox account.
-# The launch guardrails (design §8.7) are attached to this group later (task #25).
+# The launch guardrails (design §8.7) are attached to this group below (task #25).
 # ---------------------------------------------------------------------------
 resource "aws_iam_group" "team" {
   name = "cost-guardian-team"
@@ -114,4 +114,95 @@ resource "aws_sesv2_email_identity" "address" {
   for_each = toset(concat(values(var.team_members), [var.sender_email, var.team_email]))
 
   email_identity = each.value
+}
+
+# ---------------------------------------------------------------------------
+# Launch guardrails (design §8.7, task #25): deny rules on the team group only.
+# The Guardian's own Lambda roles are not affected.
+#
+# - Every Deny is scoped to the resources that carry the tags (instance, volume,
+#   elastic-ip). RunInstances is also checked against the ENI, subnet, SG, AMI and
+#   key pair, which carry no tags: "Resource": "*" would refuse every launch.
+# - `owner` and `project` are checked in SEPARATE statements: two keys in one
+#   `Null` block are ANDed, so the deny would only fire when both are missing.
+# - No snapshot rule: the Guardian only tracks its own snapshots.
+# - User `reda` also has AdministratorAccess attached directly (and via the group);
+#   an explicit Deny wins over any Allow, so the guardrails still apply to him.
+#   IAM never restricts the root user.
+# Test with the --dry-run script (design §8.7, five cases).
+# ---------------------------------------------------------------------------
+locals {
+  guardrail_tagged_resources = {
+    RunInstances    = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*"]
+    CreateVolume    = ["arn:aws:ec2:*:*:volume/*"]
+    AllocateAddress = ["arn:aws:ec2:*:*:elastic-ip/*"]
+  }
+
+  # One statement per (action, required tag), e.g. DenyRunInstancesWithoutOwnerTag.
+  guardrail_missing_tag_rules = flatten([
+    for action, resources in local.guardrail_tagged_resources : [
+      for tag in ["owner", "project"] : {
+        sid       = "Deny${action}Without${title(tag)}Tag"
+        action    = "ec2:${action}"
+        tag       = tag
+        resources = resources
+      }
+    ]
+  ])
+}
+
+data "aws_iam_policy_document" "launch_guardrails" {
+  dynamic "statement" {
+    for_each = local.guardrail_missing_tag_rules
+
+    content {
+      sid       = statement.value.sid
+      effect    = "Deny"
+      actions   = [statement.value.action]
+      resources = statement.value.resources
+
+      condition {
+        test     = "Null"
+        variable = "aws:RequestTag/${statement.value.tag}"
+        values   = ["true"]
+      }
+    }
+  }
+
+  statement {
+    sid       = "DenyRunInstancesDisallowedType"
+    effect    = "Deny"
+    actions   = ["ec2:RunInstances"]
+    resources = ["arn:aws:ec2:*:*:instance/*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "ec2:InstanceType"
+      values   = var.guardrail_allowed_instance_types
+    }
+  }
+
+  statement {
+    sid       = "DenyOwnerTagNotEmail"
+    effect    = "Deny"
+    actions   = ["ec2:RunInstances", "ec2:CreateVolume", "ec2:AllocateAddress"]
+    resources = distinct(flatten(values(local.guardrail_tagged_resources)))
+
+    condition {
+      test     = "StringNotLike"
+      variable = "aws:RequestTag/owner"
+      values   = ["*@*"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "launch_guardrails" {
+  name        = "cost-guardian-launch-guardrails"
+  description = "Team launch guardrails (design 8.7): owner/project tags at create time, allowed instance types"
+  policy      = data.aws_iam_policy_document.launch_guardrails.json
+}
+
+resource "aws_iam_group_policy_attachment" "team_guardrails" {
+  group      = aws_iam_group.team.name
+  policy_arn = aws_iam_policy.launch_guardrails.arn
 }

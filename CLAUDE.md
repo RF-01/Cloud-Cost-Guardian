@@ -54,6 +54,9 @@ Shared folders:
 - Keep `DRY_RUN=true` in every personal stack. Only the final team test turns it off, and only for seeded test resources.
 - Personal stacks use the dev scope filter (`CONTRACT.md` §6) so one person's scanner never acts on another person's resources.
 - SES is in sandbox: 200 emails per day for the whole account. Never write loops that could send unbounded email.
+- Launch guardrails (infra/shared): team members' RunInstances / CreateVolume / AllocateAddress need `owner` (an email)
+  and `project` tags at create time, on the instance AND its volumes; instance types t3.micro or t3.small only.
+  Test with `--dry-run`.
 
 ## Terraform rules
 

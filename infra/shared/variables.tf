@@ -32,3 +32,9 @@ variable "team_email" {
   type        = string
   default     = "rif07@mail.aub.edu"
 }
+
+variable "guardrail_allowed_instance_types" {
+  description = "Instance types team members may launch (launch guardrails, design §8.7)"
+  type        = list(string)
+  default     = ["t3.micro", "t3.small"]
+}

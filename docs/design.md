@@ -385,6 +385,8 @@ An IAM policy attached to the **team's IAM group** (not to the Guardian's own ro
 | `owner` that doesn't look like an email (optional) | `"StringNotLike": {"aws:RequestTag/owner": "*@*"}` | Instance and volume resources |
 | `ec2:CreateSnapshot` without the tags (optional) | `"Null"` on the tags, as above | `arn:aws:ec2:*:*:snapshot/*` |
 
+Implemented in `infra/shared`: policy `cost-guardian-launch-guardrails` on group `cost-guardian-team`. `owner` and `project` are checked in separate statements (two keys in one `Null` block would only deny when both are missing). The email-format rule is used on instances, volumes and Elastic IPs; the snapshot rule is not used.
+
 The other launch resources (network interface, subnet, security group, AMI, key pair) don't need tags: most are existing resources that the launch only uses, and the network interface is deleted with the instance. The Guardian monitors instances, volumes and Elastic IPs, and all three are covered. The snapshot rule is optional because the Guardian only tracks its own snapshots.
 
 **Testing with `--dry-run` (free):** `aws ec2 run-instances --dry-run ...` launches nothing and costs nothing. AWS replies `DryRunOperation` if the launch would be allowed, or `UnauthorizedOperation` if refused. Test cases:
@@ -1083,11 +1085,10 @@ Decide before building the part that needs it:
 - Whether to add the optional network ACL (§6.4).
 - Exact timings: scan interval, detection window for the real tool, workflow waits, reminder intervals, Elastic IP "stopped too long" threshold. *(Defaults set in `CONTRACT.md`: postpone 7 days, at most 2 postpones, at most 2 automatic restarts, restore links valid 30 days.)*
 - Detection thresholds for CPU, network and disk (tuned during testing). Initial values (common/idle.py, set during testing Nov 22): CPU avg < 5% and max < 20%, network < 2 MB/hour, disk < 3,600 ops/hour (1 op/s).
-- Allowed instance types for the guardrails.
 - Budget amounts per project and alert thresholds (the account budget is $5).
 - Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers. *(Decided: price table covers all default-enabled regions.)*
 
-*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox).*
+*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox); guardrail instance types t3.micro and t3.small (§8.7).*
 
 ---
 
