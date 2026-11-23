@@ -109,6 +109,13 @@ data "aws_iam_policy_document" "remediation" {
     }
   }
 
+  # Audit entries only (common/audit.py, CONTRACT §3.3): instance_stopped, snapshot_created, volume_deleted.
+  statement {
+    sid       = "WriteAudit"
+    actions   = ["dynamodb:PutItem"]
+    resources = [var.table_arns["audit"]]
+  }
+
   # CreateSnapshot is authorized on both the source volume and the new snapshot.
   statement {
     sid     = "CreateSnapshots"
@@ -152,6 +159,7 @@ resource "aws_lambda_function" "remediation" {
     variables = {
       NAME_PREFIX              = var.name_prefix
       TABLE_FINDINGS           = var.table_names["findings"]
+      TABLE_AUDIT              = var.table_names["audit"]
       DRY_RUN                  = tostring(var.dry_run)
       DEV_SCOPE                = var.dev_scope
       DETECTION_WINDOW_MINUTES = tostring(var.detection_window_minutes)

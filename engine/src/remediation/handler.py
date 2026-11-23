@@ -1,6 +1,7 @@
 """Remediation Lambda (lane A, CONTRACT §4.3, design §9.2 / §9.3 / §9.5). Called by the timeline workflows only.
 
-Input: {"action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": true, ...}
+Input: {"action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": true,
+        "findingType": "...", "generation": N, ...}   (findingType / generation optional, for the audit entry)
 
     CHECK_EC2        -> {"stillIdle": bool, "protected": bool, "state": "running"}
     STOP_INSTANCE    -> {"stopped": bool, "dryRun": bool, "elasticIps": [...]}  (already stopped: false, false)
@@ -15,9 +16,12 @@ Safety:
 - Never stops or deletes anything tagged guardian:protect=true (IAM denies it too).
 - DELETE_VOLUME refuses unless snapshotId is a completed snapshot tagged guardian:source-volume=<volume>.
 - Errors raise so Step Functions retries; refusals raise RefusedError (the workflow doesn't retry those).
-- One JSON log line per action. This Lambda writes nothing to DynamoDB (the workflow does).
+- One JSON log line per action. The only DynamoDB writes are audit entries (CONTRACT §3.3, actor
+  "remediation"): instance_stopped (stopped or dry-run stop; not when someone else had already stopped it),
+  snapshot_created (details.snapshotId, null in dry-run), volume_deleted. They never raise (common/audit.py).
+  The findings table is updated by the workflow.
 
-Environment: NAME_PREFIX, TABLE_FINDINGS, DRY_RUN, DEV_SCOPE, DETECTION_WINDOW_MINUTES.
+Environment: NAME_PREFIX, TABLE_FINDINGS, TABLE_AUDIT, DRY_RUN, DEV_SCOPE, DETECTION_WINDOW_MINUTES.
 """
 
 import json
@@ -27,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from common import idle
+from common import audit, idle
 
 PROTECT_TAG = "guardian:protect"
 SCOPE_TAG = "guardian:dev-scope"
@@ -115,6 +119,13 @@ def _snapshot(ec2, snapshot_id):
     return snapshots[0] if snapshots else None
 
 
+def _audit(event, name, default_finding_type, dry, details=None):
+    """Audit entry for an action taken (or logged in dry-run). findingType / generation come from the input."""
+    audit.write_audit(event["resourceId"], "remediation", name,
+                      finding_type=event.get("findingType") or default_finding_type, region=event.get("region"),
+                      generation=event.get("generation"), dry_run=dry, result="ok", details=details)
+
+
 def _require(event, key):
     value = event.get(key)
     if not value:
@@ -175,9 +186,11 @@ def stop_instance(event, ec2):
         raise RefusedError(f"{rid} is {state}, not running")
     if dry:
         _log(rid, "STOP_INSTANCE", "dry_run", findingType="EC2_IDLE", dryRun=True, elasticIps=elastic_ips)
+        _audit(event, "instance_stopped", "EC2_IDLE", True, {"elasticIps": elastic_ips})
         return {"stopped": False, "dryRun": True, "elasticIps": elastic_ips}
     ec2.stop_instances(InstanceIds=[rid])  # graceful: no Force, OS shutdown not skipped (design §9.2)
     _log(rid, "STOP_INSTANCE", "stopped", findingType="EC2_IDLE", dryRun=False, elasticIps=elastic_ips)
+    _audit(event, "instance_stopped", "EC2_IDLE", False, {"elasticIps": elastic_ips})
     return {"stopped": True, "dryRun": False, "elasticIps": elastic_ips}
 
 
@@ -211,6 +224,7 @@ def create_snapshot(event, ec2):
         raise RefusedError(f"{rid} is tagged {PROTECT_TAG}=true")
     if dry:
         _log(rid, "CREATE_SNAPSHOT", "dry_run", findingType="EBS_UNATTACHED", dryRun=True)
+        _audit(event, "snapshot_created", "EBS_UNATTACHED", True, {"snapshotId": None})
         return {"snapshotId": None, "dryRun": True}
     # Copy the volume's tags (aws:* keys are reserved and can't be set) + the source-volume tag, at creation.
     snap_tags = [{"Key": k, "Value": v} for k, v in tags.items()
@@ -223,6 +237,7 @@ def create_snapshot(event, ec2):
     )
     _log(rid, "CREATE_SNAPSHOT", "created", findingType="EBS_UNATTACHED", dryRun=False,
          snapshotId=snap["SnapshotId"])
+    _audit(event, "snapshot_created", "EBS_UNATTACHED", False, {"snapshotId": snap["SnapshotId"]})
     return {"snapshotId": snap["SnapshotId"], "dryRun": False}
 
 
@@ -259,6 +274,7 @@ def delete_volume(event, ec2):
     if dry:
         _log(rid, "DELETE_VOLUME", "dry_run", findingType="EBS_UNATTACHED", dryRun=True,
              snapshotId=event.get("snapshotId"))
+        _audit(event, "volume_deleted", "EBS_UNATTACHED", True, {"snapshotId": event.get("snapshotId")})
         return {"deleted": False, "dryRun": True}
     snapshot_id = _require(event, "snapshotId")
     snap = _our_snapshot(ec2, rid, snapshot_id)
@@ -268,6 +284,7 @@ def delete_volume(event, ec2):
         raise RefusedError(f"{rid} is {vol['State']}, not available")
     ec2.delete_volume(VolumeId=rid)
     _log(rid, "DELETE_VOLUME", "deleted", findingType="EBS_UNATTACHED", dryRun=False, snapshotId=snapshot_id)
+    _audit(event, "volume_deleted", "EBS_UNATTACHED", False, {"snapshotId": snapshot_id})
     return {"deleted": True, "dryRun": False}
 
 

@@ -16,7 +16,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from common import idle, timeline
+from common import audit, idle, timeline
 from scanner import clients, config, findings, pricing
 
 TIMELINE_TYPES = ("EC2_IDLE", "EBS_UNATTACHED")
@@ -83,6 +83,12 @@ class _Scan:
     def record(self, resource_id, finding_type, attrs, report_only=None):
         is_new, item = findings.upsert(resource_id, finding_type, attrs, self.now_iso)
         self.counts[finding_type] += 1
+        if is_new:
+            # CONTRACT §3.3: a newly created finding (any type). Reopen / resolve are #35.
+            audit.write_audit(resource_id, "scanner", "finding_opened", finding_type=finding_type,
+                              region=self.region,
+                              details={k: attrs[k] for k in ("estimatedMonthlyCost", "missingTags")
+                                       if attrs.get(k) is not None})
         if finding_type in TIMELINE_TYPES:
             item = self._apply_report_only(item, report_only)
             self._maybe_start(item)

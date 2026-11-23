@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.10 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.11 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -131,6 +131,21 @@ GSI `byDay`: **`day`** (S) + **`ts`** (S) — for the dashboard's activity view.
 
 `workflow_failed` details: `failedStep`, `errorMessage`, `progress`, `executionName`.
 
+Who writes each event:
+
+| Writer | `actor` | Events |
+|---|---|---|
+| scanner | `scanner` | `finding_opened` (every new finding, all types incl. `MISSING_TAGS`), `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found` |
+| `common/timeline.py` | the caller (`scanner` / `action-link`) | `timeline_started` (result `started` / `adopted` only; `generation` = the new one), `timeline_stopped` |
+| notify | `notify` | `notice_sent`, `final_warning_sent`, `email_fallback` |
+| remediation | `remediation` | `instance_stopped` (also a dry-run stop; not when someone else had stopped it), `snapshot_created`, `volume_deleted` |
+| workflow (Step Functions) | `workflow` | `workflow_failed` |
+| action Lambda | `action-link` | `link_protect`, `link_postpone`, `link_restore`, `link_refused` |
+
+Audit writes never raise; a failed write is logged (`audit_write_failed`). Shared writer: `common/audit.py`
+`write_audit(...)`. No audit entry for the `STOP_CONFIRMATION` email (`instance_stopped` covers the action).
+Several entries can share one second; their order within it is not defined (the `ts` suffix is random).
+
 ### 3.4 `<prefix>tokens` (action links, design §10.4)
 Key: **`tokenHash`** (S, hex SHA-256 of the raw token). TTL on `ttl`.
 
@@ -249,7 +264,9 @@ daysOpen, deadlineAt?, timelineStep?, reportOnlyReason?, name?}`. Every item als
 list of the Notify input (so it gets `lastNotifiedAt` and, if `in_progress`, its links).
 
 ### 4.3 Remediation — called by workflows only
-Input: `{ "action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": true, ... }`
+Input: `{ "action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": true, "findingType": "...",
+"generation": 1, ... }`. `findingType` and `generation` are optional (used only for the audit entry, §3.3);
+the workflows pass both on every call.
 
 | action | Extra input | Output |
 |---|---|---|
@@ -284,17 +301,20 @@ A postpone starts the next generation with `beforeFinalSeconds` = `POSTPONE_SECO
 
 ### 4.5 `common/timeline.py` (owned by lane A, used by scanner and action Lambda)
 ```python
-start_timeline(resource_id, finding_type, reason) -> {"result": str, "finding": dict}
+start_timeline(resource_id, finding_type, reason, *, actor="scanner") -> {"result": str, "finding": dict}
     # reason / required status: new -> open, reopen -> open, restart -> failed (restartCount < MAX_RESTARTS,
     #   +1), postpone -> in_progress (stops the current execution first; postponeCount < MAX_POSTPONES, +1).
     # Status, limits and counters are checked/updated in the same conditional write that claims gen+1.
     # A new generation clears failedStep, errorMessage, deadlineAt, remediatedAt, resolvedAt, dryRun,
     #   realizedMonthlySavings.
     # result: started | adopted | already_running | lost_race | superseded.
-stop_timeline(resource_id, finding_type, new_status, report_only_reason=None) -> dict
+    # started / adopted -> audit timeline_started (actor; generation; details startResult, reason, executionName).
+stop_timeline(resource_id, finding_type, new_status, report_only_reason=None, *, actor="scanner") -> dict
     # StopExecution on the current execution (ignores "already finished"), updates status;
     # sets timelineStep = done only if the finding has an executionName.
+    # -> audit timeline_stopped (actor; details newStatus, reportOnlyReason, stopResult, executionName).
 ```
+`actor` is the audit actor (§3.3): the scanner uses the default, the action Lambda passes `"action-link"`.
 No other code calls `StartExecution` / `StopExecution` directly.
 
 ### 4.6 Action API (API Gateway → Action Lambda)
@@ -421,3 +441,5 @@ budget amounts.
 - v2.9 — §9: allowed instance types decided (t3.micro, t3.small; launch guardrails in `infra/shared`, #25).
 - v2.10 — §6 / §9: Bedrock model decided (Amazon Nova 2 Lite, US geo inference profile), daily cap,
   answer and question limits; new `BEDROCK_MAX_QUESTION_CHARS` (#15).
+- v2.11 — §3.3 who writes each audit event, audit writes never raise; §4.3 remediation takes findingType /
+  generation; §4.5 timeline writes timeline_started / timeline_stopped, new `actor` argument (#29 follow-up).

@@ -7,11 +7,12 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from common import idle, timeline
+from common import audit, idle, timeline
 from scanner import config, findings, handler
 
 REGION = "us-west-2"
 TABLE = "cg-test-findings"
+AUDIT_TABLE = "cg-test-audit"
 SCOPE = "cg-dev-"
 OWNED = {"owner": "Alice@Example.com", "project": "demo", "Name": "web-1"}
 
@@ -26,6 +27,7 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
     monkeypatch.setenv("AWS_REGION", REGION)
     monkeypatch.setenv("TABLE_FINDINGS", TABLE)
+    monkeypatch.setenv("TABLE_AUDIT", AUDIT_TABLE)
     monkeypatch.setenv("SCAN_REGIONS", REGION)
     monkeypatch.setenv("DRY_RUN", "true")
     with mock_aws():
@@ -37,13 +39,37 @@ def aws(monkeypatch):
                                   {"AttributeName": "findingType", "AttributeType": "S"}],
             BillingMode="PAY_PER_REQUEST",
         )
+        audit_table = create_audit_table()
         findings.reset_clients()
         timeline.reset_clients()
+        audit.reset_clients()
         ec2 = boto3.client("ec2", region_name=REGION)
         yield {"table": table, "ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION),
+               "audit": audit_table,
                "ami": ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]}
         findings.reset_clients()
         timeline.reset_clients()
+        audit.reset_clients()
+
+
+def create_audit_table():
+    """<prefix>audit as in CONTRACT §3.3 (resourceId + ts, GSI byDay)."""
+    return boto3.resource("dynamodb", region_name=REGION).create_table(
+        TableName=AUDIT_TABLE,
+        KeySchema=[{"AttributeName": "resourceId", "KeyType": "HASH"}, {"AttributeName": "ts", "KeyType": "RANGE"}],
+        AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in ("resourceId", "ts", "day")],
+        GlobalSecondaryIndexes=[{"IndexName": "byDay",
+                                 "KeySchema": [{"AttributeName": "day", "KeyType": "HASH"},
+                                               {"AttributeName": "ts", "KeyType": "RANGE"}],
+                                 "Projection": {"ProjectionType": "ALL"}}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+def audit_entries(aws, rid=None):
+    """Audit items (optionally for one resource), oldest first."""
+    items = aws["audit"].scan()["Items"]
+    return sorted((i for i in items if rid is None or i["resourceId"] == rid), key=lambda i: i["ts"])
 
 
 def later(hours=2):
@@ -756,3 +782,46 @@ def test_sessions_are_per_thread_but_share_the_model_loader(aws):
     assert a1 is a2 and b1 is b2 and a1 is not b1
     loaders = {id(s._session.get_component("data_loader")) for s in (a1, b1, clients.session())}
     assert loaders == {id(clients._loader)}
+
+
+# ---------------------------------------------------------------- audit (CONTRACT §3.3, #29 follow-up)
+
+
+def test_new_findings_write_finding_opened(aws):
+    vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
+    handler.scan_region(REGION, now=later())
+    entries = audit_entries(aws, vol)
+    # Same second: the ts suffix is random, so compare sorted.
+    assert sorted((e["event"], e["findingType"]) for e in entries) == [
+        ("finding_opened", "EBS_UNATTACHED"), ("finding_opened", "MISSING_TAGS")]
+    by_type = {e["findingType"]: e for e in entries}
+    for entry in by_type.values():
+        assert (entry["actor"], entry["region"], entry["result"]) == ("scanner", REGION, "ok")
+        assert "generation" not in entry and "dryRun" not in entry
+    assert by_type["MISSING_TAGS"]["details"] == {"missingTags": ["owner", "project"]}
+    assert by_type["EBS_UNATTACHED"]["details"]["estimatedMonthlyCost"] > 0
+
+
+def test_later_scans_write_no_finding_opened(aws):
+    vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
+    handler.scan_region(REGION, now=later(1))
+    handler.scan_region(REGION, now=later(3))
+    assert len([e for e in audit_entries(aws, vol) if e["event"] == "finding_opened"]) == 2  # one per type
+
+
+def test_finding_opened_and_timeline_started(aws, linux, monkeypatch):
+    sfn = boto3.client("stepfunctions", region_name=REGION)
+    sm = sfn.create_state_machine(name="cg-test-ec2-timeline", roleArn="arn:aws:iam::123456789012:role/r",
+                                  definition=json.dumps({"StartAt": "W", "States": {
+                                      "W": {"Type": "Wait", "Seconds": 1, "End": True}}}))["stateMachineArn"]
+    monkeypatch.setenv("EC2_SFN_ARN", sm)
+    iid = launch(aws, OWNED)
+    scan_at = later()
+    put_metrics(aws, iid, scan_at)
+    handler.scan_region(REGION, now=scan_at)
+    handler.scan_region(REGION, now=scan_at + timedelta(minutes=30))
+    entries = {e["event"]: e for e in audit_entries(aws, iid)}
+    assert len(audit_entries(aws, iid)) == 2  # the second scan wrote nothing
+    assert entries["finding_opened"]["findingType"] == "EC2_IDLE"
+    started = entries["timeline_started"]
+    assert started["actor"] == "scanner" and started["generation"] == 1 and started["details"]["reason"] == "new"

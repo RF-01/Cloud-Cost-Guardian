@@ -2,17 +2,23 @@
 
 This is the only code that calls Step Functions StartExecution / StopExecution.
 
-    start_timeline(resource_id, finding_type, reason) -> {"result": str, "finding": dict}
-    stop_timeline(resource_id, finding_type, new_status, report_only_reason=None) -> dict
+    start_timeline(resource_id, finding_type, reason, *, actor="scanner") -> {"result": str, "finding": dict}
+    stop_timeline(resource_id, finding_type, new_status, report_only_reason=None, *, actor="scanner") -> dict
 
 Exactly one timeline per finding: every execution is named <ec2|ebs>-<resourceId>-gen<N>, and the
 generation N is claimed in the findings table with a conditional write before StartExecution. The same
 write checks the required status and the restart / postpone limits and bumps their counters.
-`generation` is always stored as a DynamoDB number. This module writes no audit entries (callers do).
+`generation` is always stored as a DynamoDB number.
+
+Audit (CONTRACT §3.3): a start that ends `started` or `adopted` writes `timeline_started` (generation = the new
+generation; result "ok"; details: startResult, reason, executionName); every stop_timeline writes
+`timeline_stopped` (details: newStatus, reportOnlyReason, stopResult, executionName). `actor` is the caller:
+"scanner" (default) or "action-link".
+Audit writes never raise (common/audit.py).
 
 Refusals (wrong reason, finding type, status, report-only, limit reached) raise ValueError.
 
-Environment: TABLE_FINDINGS, EC2_SFN_ARN, EBS_SFN_ARN, DRY_RUN, MAX_RESTARTS, MAX_POSTPONES,
+Environment: TABLE_FINDINGS, TABLE_AUDIT, EC2_SFN_ARN, EBS_SFN_ARN, DRY_RUN, MAX_RESTARTS, MAX_POSTPONES,
 POSTPONE_SECONDS, WAIT_BEFORE_FINAL_SECONDS_<EC2|EBS>, WAIT_BEFORE_ACTION_SECONDS_<EC2|EBS>.
 """
 
@@ -24,6 +30,8 @@ from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
+
+from common import audit
 
 STATUSES = ("open", "in_progress", "remediated", "resolved", "failed")
 REPORT_ONLY_REASONS = ("protected", "autoscaling")
@@ -285,14 +293,29 @@ def _is_ours(finding, arn):
             and existing.get("generation") == int(finding["generation"]))
 
 
+def _gen(finding):
+    """The finding's generation as an int (DynamoDB returns a Decimal), or None."""
+    gen = finding.get("generation")
+    return int(gen) if gen is not None else None
+
+
 def _outcome(resource_id, finding_type, result, finding, **extra):
     _log(resource_id, finding_type, "start_timeline", result, executionName=finding.get("executionName"),
-         generation=finding.get("generation"), **extra)
+         generation=_gen(finding), **extra)
     return {"result": result, "finding": finding}
 
 
-def start_timeline(resource_id, finding_type, reason):
-    """Start the next timeline for a finding. Returns {"result", "finding"} (CONTRACT §4.5)."""
+def _audit_started(finding, result, reason, actor):
+    audit.write_audit(finding["resourceId"], actor, "timeline_started", finding_type=finding["findingType"],
+                      region=finding.get("region"), generation=_gen(finding), result="ok",
+                      details={"startResult": result, "reason": reason,
+                               "executionName": finding.get("executionName")})
+
+
+def start_timeline(resource_id, finding_type, reason, *, actor="scanner"):
+    """Start the next timeline for a finding. Returns {"result", "finding"} (CONTRACT §4.5).
+
+    Writes a `timeline_started` audit entry (as `actor`) when the result is started / adopted."""
     if reason not in REASONS:
         raise ValueError(f"unknown reason {reason!r}")
     if finding_type not in TIMELINE_TYPES:
@@ -372,6 +395,7 @@ def start_timeline(resource_id, finding_type, reason):
                 _stop_quietly(arn)
             return _outcome(resource_id, finding_type, "superseded", _get_finding(resource_id, finding_type),
                             reason=reason, startedName=name)
+        _audit_started(stored, result, reason, actor)
         return _outcome(resource_id, finding_type, result, stored, reason=reason, pendingRetry=pending)
 
     _log(resource_id, finding_type, "start_timeline", "error", reason=reason,
@@ -405,8 +429,10 @@ def _stop_quietly(arn):
         raise
 
 
-def stop_timeline(resource_id, finding_type, new_status, report_only_reason=None):
-    """Stop the finding's current execution (if any) and set its status. Returns the updated item."""
+def stop_timeline(resource_id, finding_type, new_status, report_only_reason=None, *, actor="scanner"):
+    """Stop the finding's current execution (if any) and set its status. Returns the updated item.
+
+    Writes a `timeline_stopped` audit entry (as `actor`) after the update."""
     if new_status not in STATUSES:
         raise ValueError(f"unknown status {new_status!r}")
     if report_only_reason is not None and report_only_reason not in REPORT_ONLY_REASONS:
@@ -437,4 +463,8 @@ def stop_timeline(resource_id, finding_type, new_status, report_only_reason=None
     )["Attributes"]
     _log(resource_id, finding_type, "stop_timeline", stop_result, newStatus=new_status,
          executionName=finding.get("executionName"), reportOnlyReason=report_only_reason)
+    audit.write_audit(resource_id, actor, "timeline_stopped", finding_type=finding_type,
+                      region=updated.get("region"), generation=_gen(updated), result="ok",
+                      details={"newStatus": new_status, "reportOnlyReason": report_only_reason,
+                               "stopResult": stop_result, "executionName": finding.get("executionName")})
     return updated

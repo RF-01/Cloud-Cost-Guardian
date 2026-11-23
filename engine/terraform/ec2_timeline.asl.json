@@ -319,12 +319,7 @@
       "TimeoutSeconds": 90,
       "Arguments": {
         "FunctionName": "${remediation_arn}",
-        "Payload": {
-          "action": "STOP_INSTANCE",
-          "resourceId": "{% $input.resourceId %}",
-          "region": "{% $input.region %}",
-          "dryRun": "{% $input.dryRun %}"
-        }
+        "Payload": ${stop_payload}
       },
       "Assign": {
         "stop": "{% $states.result.Payload %}"

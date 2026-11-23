@@ -93,6 +93,14 @@ data "aws_iam_policy_document" "scanner" {
     resources = [var.table_arns["findings"]]
   }
 
+  # Audit entries only (common/audit.py, CONTRACT §3.3): finding_opened, and timeline_started / timeline_stopped
+  # written by common/timeline.py.
+  statement {
+    sid       = "WriteAudit"
+    actions   = ["dynamodb:PutItem"]
+    resources = [var.table_arns["audit"]]
+  }
+
   # common/timeline.py: only when the engine's state machines exist.
   dynamic "statement" {
     for_each = length(local.sfn_arns) > 0 ? [1] : []
@@ -133,6 +141,7 @@ resource "aws_lambda_function" "scanner" {
     variables = merge(local.waits, {
       NAME_PREFIX                 = var.name_prefix
       TABLE_FINDINGS              = var.table_names["findings"]
+      TABLE_AUDIT                 = var.table_names["audit"]
       DRY_RUN                     = tostring(var.dry_run)
       SCAN_REGIONS                = var.scan_regions
       DEV_SCOPE                   = var.dev_scope

@@ -16,14 +16,18 @@ ASL = TF / "ec2_timeline.asl.json"
 ERROR_MESSAGE = TF / "failure_error_message.jsonata"
 SFN_TF = TF / "sfn.tf"
 CONDITION = "generation = :gen AND #st = :inProgress"
+# sfn.tf local.remediation_args: every Remediation call (CONTRACT §4.3, incl. findingType / generation for audit).
+REMEDIATION_ARGS = {"resourceId": "{% $input.resourceId %}", "region": "{% $input.region %}",
+                    "dryRun": "{% $input.dryRun %}", "findingType": "{% $input.findingType %}",
+                    "generation": "{% $input.generation %}"}
 PARTS = {
     "findings_table": "cg-test-findings",
     "notify_arn": "arn:aws:lambda:us-west-2:123456789012:function:cg-test-notify",
     "remediation_arn": "arn:aws:lambda:us-west-2:123456789012:function:cg-test-remediation",
     "finding_key": json.dumps({"resourceId": {"S": "{% $input.resourceId %}"},
                                "findingType": {"S": "{% $input.findingType %}"}}),
-    "check_payload": json.dumps({"action": "CHECK_EC2", "resourceId": "{% $input.resourceId %}",
-                                 "region": "{% $input.region %}", "dryRun": "{% $input.dryRun %}"}),
+    "check_payload": json.dumps({"action": "CHECK_EC2", **REMEDIATION_ARGS}),
+    "stop_payload": json.dumps({"action": "STOP_INSTANCE", **REMEDIATION_ARGS}),
     "notify_retry": json.dumps([{"ErrorEquals": ["Lambda.ServiceException"]}]),
     "remediation_retry": json.dumps([{"ErrorEquals": ["RefusedError"], "MaxAttempts": 0}]),
     "ddb_retry": json.dumps([{"ErrorEquals": ["DynamoDB.ThrottlingException"]}]),
@@ -340,6 +344,27 @@ def test_lambda_tasks(sm):
     templates = {n: tasks[n]["Arguments"]["Payload"]["template"] for n in notify}
     assert templates == {"FirstNotice": "FIRST_NOTICE", "FinalWarning": "FINAL_WARNING",
                          "StopConfirmation": "STOP_CONFIRMATION", "NotifyFailure": "WORKFLOW_FAILED"}
+
+
+def test_remediation_calls_pass_finding_type_and_generation(sm):
+    tasks = {n: s for n, s in sm["States"].items()
+             if s.get("Resource") == "arn:aws:states:::lambda:invoke"
+             and s["Arguments"]["FunctionName"] == PARTS["remediation_arn"]}
+    assert set(tasks) == {"RecheckBeforeFinal", "RecheckBeforeAction", "StopInstance"}
+    for name, state in tasks.items():
+        payload = state["Arguments"]["Payload"]
+        assert {k: payload[k] for k in REMEDIATION_ARGS} == REMEDIATION_ARGS, name
+    assert tasks["StopInstance"]["Arguments"]["Payload"]["action"] == "STOP_INSTANCE"
+
+
+def test_sfn_tf_remediation_args():
+    tf = SFN_TF.read_text(encoding="utf-8")
+    for line in ('resourceId  = "{% $input.resourceId %}"', 'region      = "{% $input.region %}"',
+                 'dryRun      = "{% $input.dryRun %}"', 'findingType = "{% $input.findingType %}"',
+                 'generation  = "{% $input.generation %}"',
+                 'check_payload = jsonencode(merge({ action = "CHECK_EC2" }, local.remediation_args))',
+                 'stop_payload  = jsonencode(merge({ action = "STOP_INSTANCE" }, local.remediation_args))'):
+        assert line in tf, line
 
 
 @pytest.mark.parametrize("name", ["FirstNotice", "FinalWarning"])

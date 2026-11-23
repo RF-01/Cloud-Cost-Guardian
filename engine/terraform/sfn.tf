@@ -16,6 +16,16 @@ locals {
     JitterStrategy  = "FULL"
   }
 
+  # Arguments of every Remediation Lambda call, shared with the EBS timeline (#30). findingType and generation
+  # are for the remediation's audit entries (CONTRACT §4.3); "{% $input.generation %}" stays a number.
+  remediation_args = {
+    resourceId  = "{% $input.resourceId %}"
+    region      = "{% $input.region %}"
+    dryRun      = "{% $input.dryRun %}"
+    findingType = "{% $input.findingType %}"
+    generation  = "{% $input.generation %}"
+  }
+
   ec2_timeline_parts = {
     findings_table  = var.table_names["findings"]
     notify_arn      = var.notify_function_arn
@@ -26,12 +36,8 @@ locals {
       findingType = { S = "{% $input.findingType %}" }
     })
 
-    check_payload = jsonencode({
-      action     = "CHECK_EC2"
-      resourceId = "{% $input.resourceId %}"
-      region     = "{% $input.region %}"
-      dryRun     = "{% $input.dryRun %}"
-    })
+    check_payload = jsonencode(merge({ action = "CHECK_EC2" }, local.remediation_args))
+    stop_payload  = jsonencode(merge({ action = "STOP_INSTANCE" }, local.remediation_args))
 
     # Notify: service errors only. A Notify failure (after retries) fails the execution, so the
     # instance is never stopped without its final warning (design §9.5).

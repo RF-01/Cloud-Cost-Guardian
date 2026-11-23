@@ -7,11 +7,14 @@ import boto3
 import pytest
 from moto import mock_aws
 
+from common import audit
+
 ENGINE = Path(__file__).resolve().parents[1]
 HANDLER = ENGINE / "src" / "remediation" / "handler.py"
 REGION = "us-west-2"
 OTHER_REGION = "eu-west-1"
 SCOPE = "cg-dev-"
+AUDIT_TABLE = "cg-test-audit"
 
 
 def load_handler():
@@ -33,10 +36,34 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
     monkeypatch.setenv("DRY_RUN", "false")  # tests opt in to dry-run explicitly
+    monkeypatch.setenv("TABLE_AUDIT", AUDIT_TABLE)
     with mock_aws():
+        audit_table = create_audit_table()
+        audit.reset_clients()
         ec2 = boto3.client("ec2", region_name=REGION)
-        yield {"ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION),
+        yield {"ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION), "audit": audit_table,
                "ami": ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]}
+        audit.reset_clients()
+
+
+def create_audit_table():
+    """<prefix>audit as in CONTRACT §3.3 (resourceId + ts, GSI byDay)."""
+    return boto3.resource("dynamodb", region_name=REGION).create_table(
+        TableName=AUDIT_TABLE,
+        KeySchema=[{"AttributeName": "resourceId", "KeyType": "HASH"}, {"AttributeName": "ts", "KeyType": "RANGE"}],
+        AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in ("resourceId", "ts", "day")],
+        GlobalSecondaryIndexes=[{"IndexName": "byDay",
+                                 "KeySchema": [{"AttributeName": "day", "KeyType": "HASH"},
+                                               {"AttributeName": "ts", "KeyType": "RANGE"}],
+                                 "Projection": {"ProjectionType": "ALL"}}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+def audit_entries(aws, rid=None):
+    """Audit items (optionally for one resource), oldest first."""
+    items = aws["audit"].scan()["Items"]
+    return sorted((i for i in items if rid is None or i["resourceId"] == rid), key=lambda i: i["ts"])
 
 
 def later(hours=2):
@@ -375,3 +402,90 @@ def test_never_deletes_snapshots_or_releases_addresses():
         text = tf.read_text(encoding="utf-8")
         assert '"ec2:DeleteSnapshot"' not in text and '"ec2:ReleaseAddress"' not in text
         assert '"ec2:*"' not in text
+
+
+# ---------------------------------------------------------------- audit (CONTRACT §3.3, #29 follow-up)
+
+AUDIT_FIELDS = ("resourceId", "actor", "event", "findingType", "region", "generation", "dryRun", "result")
+
+
+def entry_of(aws, rid):
+    [entry] = audit_entries(aws, rid)
+    return entry
+
+
+def test_stop_instance_writes_instance_stopped(aws):
+    iid = launch(aws)
+    call("STOP_INSTANCE", iid, findingType="EC2_IDLE", generation=2)
+    entry = entry_of(aws, iid)
+    assert {k: entry[k] for k in AUDIT_FIELDS} == {
+        "resourceId": iid, "actor": "remediation", "event": "instance_stopped", "findingType": "EC2_IDLE",
+        "region": REGION, "generation": 2, "dryRun": False, "result": "ok"}
+    assert entry["details"] == {"elasticIps": []}
+
+
+def test_dry_run_stop_writes_instance_stopped(aws):
+    iid = launch(aws)
+    call("STOP_INSTANCE", iid, dry_run=True, findingType="EC2_IDLE", generation=1)
+    entry = entry_of(aws, iid)
+    assert entry["event"] == "instance_stopped" and entry["dryRun"] is True and entry["generation"] == 1
+    assert state(aws, iid) == "running"
+
+
+def test_finding_type_and_generation_are_optional(aws):
+    iid = launch(aws)
+    call("STOP_INSTANCE", iid)
+    entry = entry_of(aws, iid)
+    assert entry["findingType"] == "EC2_IDLE" and "generation" not in entry
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_already_stopped_writes_no_entry(aws, monkeypatch, dry_run):
+    monkeypatch.setenv("DRY_RUN", "true" if dry_run else "false")
+    iid = launch(aws)
+    aws["ec2"].stop_instances(InstanceIds=[iid])
+    assert call("STOP_INSTANCE", iid, dry_run=dry_run, generation=1)["stopped"] is False
+    assert audit_entries(aws) == []
+
+
+def test_refused_and_checks_write_no_entry(aws):
+    iid = launch(aws, {"guardian:protect": "true"})
+    with pytest.raises(rem.RefusedError):
+        call("STOP_INSTANCE", iid)
+    call("CHECK_EC2", iid, now=later())
+    call("CHECK_EBS", volume(aws))
+    assert audit_entries(aws) == []
+
+
+def test_snapshot_and_delete_write_entries(aws):
+    vid = volume(aws)
+    snap = call("CREATE_SNAPSHOT", vid, findingType="EBS_UNATTACHED", generation=1)["snapshotId"]
+    call("SNAPSHOT_STATUS", vid, snapshotId=snap)
+    call("DELETE_VOLUME", vid, snapshotId=snap, findingType="EBS_UNATTACHED", generation=1)
+    by_event = {e["event"]: e for e in audit_entries(aws, vid)}  # same second: order by ts is random
+    created, deleted = by_event["snapshot_created"], by_event["volume_deleted"]
+    assert (created["event"], created["dryRun"], created["details"]) == (
+        "snapshot_created", False, {"snapshotId": snap})
+    assert (deleted["event"], deleted["dryRun"], deleted["details"]) == (
+        "volume_deleted", False, {"snapshotId": snap})
+    assert all(e["actor"] == "remediation" and e["findingType"] == "EBS_UNATTACHED" and e["generation"] == 1
+               for e in (created, deleted))
+
+
+def test_dry_run_snapshot_and_delete_write_entries(aws):
+    vid = volume(aws)
+    call("CREATE_SNAPSHOT", vid, dry_run=True, generation=1)
+    call("DELETE_VOLUME", vid, dry_run=True, generation=1)
+    by_event = {e["event"]: e for e in audit_entries(aws, vid)}  # same second: order by ts is random
+    created, deleted = by_event["snapshot_created"], by_event["volume_deleted"]
+    assert (created["event"], created["dryRun"], created["details"]) == (
+        "snapshot_created", True, {"snapshotId": None})
+    assert (deleted["event"], deleted["dryRun"]) == ("volume_deleted", True)
+    assert created["findingType"] == "EBS_UNATTACHED"
+
+
+def test_audit_failure_does_not_fail_the_stop(aws, monkeypatch, capsys):
+    monkeypatch.setenv("TABLE_AUDIT", "cg-test-missing")
+    iid = launch(aws)
+    assert call("STOP_INSTANCE", iid)["stopped"] is True
+    assert any(line["action"] == "audit_write_failed" for line in logs(capsys))

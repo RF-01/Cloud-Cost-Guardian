@@ -6,10 +6,11 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from common import timeline
+from common import audit, timeline
 
 REGION = "us-west-2"
 TABLE = "cg-test-findings"
+AUDIT_TABLE = "cg-test-audit"
 DEFINITION = json.dumps({"StartAt": "W", "States": {"W": {"Type": "Wait", "Seconds": 1, "End": True}}})
 ROLE = "arn:aws:iam::123456789012:role/cg-test-sfn"
 ARN_X = "arn:aws:states:us-west-2:123456789012:execution:x:"
@@ -29,8 +30,10 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
     monkeypatch.setenv("AWS_REGION", REGION)
     monkeypatch.setenv("TABLE_FINDINGS", TABLE)
+    monkeypatch.setenv("TABLE_AUDIT", AUDIT_TABLE)
     monkeypatch.setenv("DRY_RUN", "true")
     with mock_aws():
+        audit_table = create_audit_table()
         ddb = boto3.resource("dynamodb", region_name=REGION)
         table = ddb.create_table(
             TableName=TABLE,
@@ -48,8 +51,30 @@ def aws(monkeypatch):
         monkeypatch.setenv("EC2_SFN_ARN", ec2_arn)
         monkeypatch.setenv("EBS_SFN_ARN", ebs_arn)
         timeline.reset_clients()
-        yield {"table": table, "sfn": sfn, "ec2_arn": ec2_arn, "ebs_arn": ebs_arn}
+        audit.reset_clients()
+        yield {"table": table, "sfn": sfn, "ec2_arn": ec2_arn, "ebs_arn": ebs_arn, "audit": audit_table}
         timeline.reset_clients()
+        audit.reset_clients()
+
+
+def create_audit_table():
+    """<prefix>audit as in CONTRACT §3.3 (resourceId + ts, GSI byDay)."""
+    return boto3.resource("dynamodb", region_name=REGION).create_table(
+        TableName=AUDIT_TABLE,
+        KeySchema=[{"AttributeName": "resourceId", "KeyType": "HASH"}, {"AttributeName": "ts", "KeyType": "RANGE"}],
+        AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in ("resourceId", "ts", "day")],
+        GlobalSecondaryIndexes=[{"IndexName": "byDay",
+                                 "KeySchema": [{"AttributeName": "day", "KeyType": "HASH"},
+                                               {"AttributeName": "ts", "KeyType": "RANGE"}],
+                                 "Projection": {"ProjectionType": "ALL"}}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+def audit_entries(aws, rid=None):
+    """Audit items (optionally for one resource), oldest first."""
+    items = aws["audit"].scan()["Items"]
+    return sorted((i for i in items if rid is None or i["resourceId"] == rid), key=lambda i: i["ts"])
 
 
 def put(aws, **attrs):
@@ -523,3 +548,83 @@ def test_stop_bad_values_refused(aws):
         timeline.stop_timeline("i-0abc123", "EC2_IDLE", "closed")
     with pytest.raises(ValueError):
         timeline.stop_timeline("i-0abc123", "EC2_IDLE", "open", report_only_reason="scheduled")
+
+
+# ---------------------------------------------------------------- audit (CONTRACT §3.3, #29 follow-up)
+
+
+def test_start_writes_timeline_started(aws):
+    put(aws)
+    start()
+    [entry] = audit_entries(aws)
+    assert {k: entry[k] for k in ("resourceId", "actor", "event", "findingType", "region", "generation",
+                                  "result")} == {
+        "resourceId": "i-0abc123", "actor": "scanner", "event": "timeline_started", "findingType": "EC2_IDLE",
+        "region": "us-east-1", "generation": 1, "result": "ok"}
+    assert entry["details"] == {"startResult": "started", "reason": "new", "executionName": "ec2-i-0abc123-gen1"}
+    assert "dryRun" not in entry
+
+
+def test_start_actor_is_the_caller(aws):
+    put(aws)
+    start()
+    timeline.start_timeline("i-0abc123", "EC2_IDLE", "postpone", actor="action-link")
+    entries = sorted(audit_entries(aws), key=lambda e: e["generation"])
+    assert [(e["actor"], e["generation"], e["details"]["reason"]) for e in entries] == [
+        ("scanner", 1, "new"), ("action-link", 2, "postpone")]
+
+
+def test_adopted_start_writes_timeline_started(aws):
+    put(aws)
+    aws["sfn"].start_execution(stateMachineArn=aws["ec2_arn"], name="ec2-i-0abc123-gen1",
+                               input=json.dumps({"resourceId": "i-0abc123", "generation": 1}))
+    assert start()["result"] == "adopted"
+    [entry] = audit_entries(aws)
+    assert entry["details"]["startResult"] == "adopted" and entry["generation"] == 1
+
+
+def test_no_timeline_started_when_nothing_started(aws, monkeypatch):
+    put(aws)
+    stale = get(aws)
+    start()
+    assert start()["result"] == "already_running"
+    first_read_returns(monkeypatch, stale)
+    assert start()["result"] == "lost_race"
+    assert len(audit_entries(aws)) == 1  # only the first, real start
+
+
+def test_start_log_generation_is_a_number(aws, capsys):
+    put(aws)
+    start()
+    line = [line for line in log_lines(capsys) if line["action"] == "start_timeline"][-1]
+    assert line["generation"] == 1  # not "1" (Decimal through default=str)
+
+
+def test_stop_writes_timeline_stopped(aws):
+    put(aws)
+    start()
+    timeline.stop_timeline("i-0abc123", "EC2_IDLE", "open", "protected", actor="action-link")
+    # Same second as the start: the ts suffix is random, so pick by event, not position.
+    [entry] = [e for e in audit_entries(aws) if e["event"] == "timeline_stopped"]
+    assert (entry["event"], entry["actor"], entry["generation"], entry["region"], entry["result"]) == (
+        "timeline_stopped", "action-link", 1, "us-east-1", "ok")
+    assert entry["details"] == {"newStatus": "open", "reportOnlyReason": "protected", "stopResult": "stopped",
+                                "executionName": "ec2-i-0abc123-gen1"}
+
+
+def test_stop_default_actor_and_no_execution(aws):
+    put(aws)
+    timeline.stop_timeline("i-0abc123", "EC2_IDLE", "resolved")
+    [entry] = audit_entries(aws)
+    assert entry["actor"] == "scanner" and entry["event"] == "timeline_stopped"
+    assert entry["details"]["stopResult"] == "no_execution" and entry["details"]["reportOnlyReason"] is None
+    assert "generation" not in entry
+
+
+def test_audit_failure_never_breaks_the_timeline(aws, monkeypatch, capsys):
+    monkeypatch.setenv("TABLE_AUDIT", "cg-test-missing")
+    put(aws)
+    assert start()["result"] == "started"
+    assert timeline.stop_timeline("i-0abc123", "EC2_IDLE", "resolved")["status"] == "resolved"
+    failed = [line for line in log_lines(capsys) if line["action"] == "audit_write_failed"]
+    assert [f["event"] for f in failed] == ["timeline_started", "timeline_stopped"]
