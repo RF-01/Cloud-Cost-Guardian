@@ -1,6 +1,6 @@
 # Inputs per CONTRACT §8 (dashboard row) plus name_prefix, owner_email, dry_run. Inputs are added as each
 # dashboard task needs them: bedrock_model_id, vpc_id, public_subnet_id, origin_secret and notify_function_name
-# come with #26, #38 and #42.
+# come with #38, #42 and #43.
 
 variable "name_prefix" {
   description = "Prefix of every resource name, e.g. cg-dev- (CONTRACT §1)"

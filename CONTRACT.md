@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.13 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.14 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -120,7 +120,7 @@ GSI `byDay`: **`day`** (S) + **`ts`** (S) — for the dashboard's activity view.
 | Attribute | Type | Notes |
 |---|---|---|
 | `day` | S | `YYYY-MM-DD` |
-| `actor` | S | `scanner` \| `workflow` \| `remediation` \| `notify` \| `action-link` \| `digest` |
+| `actor` | S | `scanner` \| `workflow` \| `remediation` \| `notify` \| `action-link` \| `digest` \| `sample-seed` |
 | `event` | S | `finding_opened`, `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found`, `notice_sent`, `final_warning_sent`, `instance_stopped`, `snapshot_created`, `volume_deleted`, `email_fallback`, `link_protect`, `link_postpone`, `link_restore`, `link_refused`, `workflow_failed`, `timeline_started`, `timeline_stopped` |
 | `findingType` | S | if related to a finding |
 | `region` | S | |
@@ -128,6 +128,7 @@ GSI `byDay`: **`day`** (S) + **`ts`** (S) — for the dashboard's activity view.
 | `dryRun` | BOOL | for actions |
 | `result` | S | `ok` \| `error` \| `skipped` |
 | `details` | M | free-form, small |
+| `sample` | BOOL | true only on demo seed rows (dashboard/tools/seed_demo.py, demo stack only); readers treat them as sample data |
 
 `workflow_failed` details: `failedStep`, `errorMessage`, `progress`, `executionName`.
 
@@ -141,6 +142,7 @@ Who writes each event:
 | remediation | `remediation` | `instance_stopped` (also a dry-run stop; not when someone else had stopped it), `snapshot_created`, `volume_deleted` |
 | workflow (Step Functions) | `workflow` | `workflow_failed` |
 | action Lambda | `action-link` | `link_protect`, `link_postpone`, `link_restore`, `link_refused` |
+| demo seed (`dashboard/tools/seed_demo.py`) | `sample-seed` | `finding_opened`, `notice_sent`, `final_warning_sent`, `instance_stopped`, `volume_deleted` (demo stack only) |
 
 Audit writes never raise; a failed write is logged (`audit_write_failed`). Shared writer: `common/audit.py`
 `write_audit(...)`. No audit entry for the `STOP_CONFIRMATION` email (`instance_stopped` covers the action).
@@ -180,7 +182,7 @@ Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>
 |---|---|---|---|
 | `<prefix>creator-lookups` | `resourceId` | `region`, `creatorArn`, `email` (or absent), `result` (`found`/`unknown`), `method` (`RunInstances`/`AllocateAddress`/`CreateVolume`/`last-attached`/`Attach`/`Detach`), `lookedUpAt` | scanner → scanner |
 | `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt` | scanner → scanner |
-| `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `actionsTakenDryRun`, `createdAt` | daily-summary → dashboard, digest |
+| `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `actionsTakenDryRun`, `createdAt`, `sample` (BOOL, seed rows only) | daily-summary → dashboard, digest |
 | `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `project#untagged` \| `total`) | `amount` (N, USD **per day**, rounded to **4** decimals: an exception to §2's 2-decimal monthly money, since daily amounts are fractions of a cent), `estimated` (BOOL, Cost Explorer's `Estimated`), `fetchedAt` | daily-cost → dashboard, digest |
 | `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold`, `message`, `day` | budget-subscriber → dashboard, digest |
 | `<prefix>counters` | `counterId` (e.g. `bedrock#2026-11-20`) | `count` (N), `ttl` | dashboard (conditional update) |
@@ -191,6 +193,7 @@ SNAPSHOT_REMINDER and include report-only; missing owner → `unknown`, missing 
 `openFindings` count active findings incl. MISSING_TAGS. `warningsSent` = notice_sent + final_warning_sent that day;
 `actionsTaken` = instance_stopped + volume_deleted that day, dry-run included (`actionsTakenDryRun` = those with
 dryRun true). A remediated finding without `dryRun` counts as dry-run.
+Demo seed rows carry sample = true; the dashboard marks them, the digest ignores them.
 
 bill-history notes: amounts are usage cost **before credits** (Cost Explorer `UnblendedCost`, filter `RECORD_TYPE = Usage`;
 net of credits every amount would be ~$0). Spend without a `project` tag is `project#untagged`. `total` = sum of
@@ -198,7 +201,7 @@ that day's `service#…` rows and is written for every fetched day, even when 0.
 
 ### 3.6 How the daily summary counts money
 
-- **Waste:** `estimatedMonthlyCost` of findings with status `open`, `in_progress` or `failed` (not `MISSING_TAGS`).
+- **Waste:** `estimatedMonthlyCost` of findings with status `open`, `in_progress` or `failed` (not `MISSING_TAGS` or `SNAPSHOT_REMINDER`).
 - **Realized savings:** `realizedMonthlySavings` of findings **currently** `remediated` **with `dryRun = false`**.
   A finding that leaves `remediated` (real restart, terminated) stops counting.
 - **Potential savings:** findings `open` / `in_progress` (not report-only) **plus** `remediated` with `dryRun = true`.
@@ -463,3 +466,5 @@ budget amounts.
   §4.7 daily-cost `days`; §8 dashboard takes `dlq_arn` (#27).
 - v2.13 — §3.5 daily-summaries rules and new `actionsTakenDryRun`; §3.6 potential savings of dry-run
   remediated findings; SNAPSHOT_REMINDER not waste; missing dryRun = dry-run (#28).
+- v2.14 — §3.3 / §3.5 `sample` marker and `sample-seed` actor for demo seed rows; §3.6 waste
+  excludes SNAPSHOT_REMINDER, matching §3.5 (#26).

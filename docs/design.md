@@ -1076,7 +1076,7 @@ Console-only steps, with the reason for each, are kept in `docs/manual-setup.md`
 - [x] **Enable Cost Explorer** (data takes a day or more to appear).
 - [x] **Create the Terraform state bucket and the account budget alert** (`bootstrap/`).
 - [x] **Verify the sender address and each team member's address in SES** (Terraform creates the identities; each person clicks the verification email).
-- [ ] **Activate `project` and `owner` as cost allocation tags** (Terraform), once at least one resource carries them. If done late, request a backfill (§11.2).
+- [x] **Activate `project` and `owner` as cost allocation tags** (Terraform), once at least one resource carries them. If done late, request a backfill (§11.2). *(Done Nov 23 via Terraform in `infra/shared`, #40.)*
 - [x] **Enable access to the chosen Bedrock model** in us-west-2, if the model requires it, and check its pricing. *(Not needed: Amazon model, enabled by default. Pricing in §12.)*
 
 ### 23.4 Repository and ways of working

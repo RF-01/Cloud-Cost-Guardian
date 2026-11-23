@@ -93,7 +93,7 @@ module "scanner" {
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
 # dashboard_instance_id, dashboard_public_dns.
 # Inputs are added as each dashboard task needs them (CONTRACT §8): bedrock_model_id, vpc_id, public_subnet_id,
-# origin_secret and notify_function_name come with #26, #38 and #42.
+# origin_secret and notify_function_name come with #38, #42 and #43.
 
 module "dashboard" {
   source = "../../dashboard/terraform"

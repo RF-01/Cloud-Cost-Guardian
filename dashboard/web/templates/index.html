@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud Cost Guardian{% if prefix %} — {{ prefix }}{% endif %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script type="application/json" id="page-config">{{ page_config|tojson }}</script>
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}" defer></script>
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>Cloud Cost Guardian</h1>
+  <p class="meta">Stack <code>{{ prefix or "?" }}</code> · read-only · page generated {{ generated_at|utc }} · all times UTC</p>
+</header>
+
+<main>
+{# ------------------------------------------------------------------ KPIs #}
+<section aria-labelledby="kpi-h">
+  <h2 id="kpi-h">Summary</h2>
+  {% if summaries_error %}
+    <p class="error">{{ summaries_error }}</p>
+  {% elif not kpi %}
+    <p class="empty">No daily summary yet. The daily-summary Lambda writes one per UTC day.</p>
+  {% else %}
+    {% if kpi.sample %}<p class="sample-note">{{ sample_note }}: no real summary exists yet, so these tiles show the latest sample one.</p>{% endif %}
+    <div class="tiles{% if kpi.sample %} is-sample{% endif %}">
+      <div class="tile"><span class="tile-label">Total monthly waste</span><span class="tile-value">{{ kpi.totalMonthlyWaste|usd }}</span><span class="tile-unit">estimated, USD/month</span></div>
+      <div class="tile"><span class="tile-label">Potential savings</span><span class="tile-value">{{ kpi.potentialMonthlySavings|usd }}</span><span class="tile-unit">estimated, USD/month</span></div>
+      <div class="tile"><span class="tile-label">Realized savings</span><span class="tile-value">{{ kpi.realizedMonthlySavings|usd }}</span><span class="tile-unit">estimated, USD/month</span></div>
+      <div class="tile"><span class="tile-label">Open findings</span><span class="tile-value">{{ kpi.openFindings if kpi.openFindings is not none else "—" }}</span><span class="tile-unit">open / in progress / failed</span></div>
+    </div>
+    <p class="meta">From the daily summary of <strong>{{ kpi.day }}</strong>{% if kpi.sample %} <span class="badge badge-sample">sample</span>{% endif %}{% if kpi.createdAt %}, computed {{ kpi.createdAt|utc }}{% endif %}.</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ charts #}
+<section aria-labelledby="trend-h">
+  <div class="section-head">
+    <h2 id="trend-h">Waste and savings over time</h2>
+    <div class="switch" role="group" aria-label="Range">
+      {% for d in page_config.dayChoices %}<button type="button" data-days="{{ d }}"{% if d == page_config.defaultDays %} aria-pressed="true"{% else %} aria-pressed="false"{% endif %}>{{ d }} days</button>{% endfor %}
+    </div>
+  </div>
+  <p class="sample-note" id="trend-sample" hidden>{{ sample_note }}. Sample days are drawn dashed / hatched.</p>
+  <noscript><p class="empty">Charts need JavaScript; the tables below work without it.</p></noscript>
+  <div class="grid2">
+    <figure class="chart" data-chart="waste"><figcaption>Waste over time <span class="unit">estimated, USD/month</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="savings"><figcaption>Savings over time <span class="unit">estimated, USD/month</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+  </div>
+</section>
+
+<section aria-labelledby="break-h">
+  <h2 id="break-h">Breakdowns <span class="unit" id="break-day"></span></h2>
+  <p class="meta">From the same daily summary as the tiles. Waste excludes missing-tag and snapshot-reminder findings; counts include every active finding.</p>
+  <div class="grid2">
+    <figure class="chart" data-chart="byRegion"><figcaption>Waste by region <span class="unit">USD/month</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="byOwner"><figcaption>Waste by owner <span class="unit">USD/month</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="byProject"><figcaption>Waste by project <span class="unit">USD/month</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="byType"><figcaption>Active findings by type <span class="unit">count</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+  </div>
+</section>
+
+<section aria-labelledby="act-h">
+  <h2 id="act-h">Weekly activity <span class="unit">last {{ page_config.weeks }} ISO weeks</span></h2>
+  <p class="sample-note" id="activity-sample" hidden>{{ sample_note }}. Weeks with sample days are hatched.</p>
+  <figure class="chart wide" data-chart="activity"><figcaption>Findings opened, warnings sent, actions taken <span class="unit">per week</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+</section>
+
+<section aria-labelledby="bill-h">
+  <h2 id="bill-h">Real bill <span class="unit">{{ bill_label }}</span></h2>
+  <p class="meta">From Cost Explorer (bill-history), full UTC days up to yesterday. Amounts are before credits, so the invoice can still be $0. <a href="{{ cost_explorer_url }}" rel="noopener noreferrer" target="_blank">Open Cost Explorer</a></p>
+  <div class="grid2">
+    <figure class="chart" data-chart="billTotal"><figcaption>Daily total <span class="unit">{{ bill_label }}</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="billServices"><figcaption>Top 5 services + other <span class="unit">{{ bill_label }}</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+    <figure class="chart" data-chart="billProjects"><figcaption>Spend by project <span class="unit">USD, sum over the range</span></figcaption><div class="canvas-box"><canvas></canvas></div><p class="empty" hidden></p><details><summary>Data table</summary><div class="table-slot"></div></details></figure>
+  </div>
+</section>
+
+{# ------------------------------------------------------------------ findings #}
+<section aria-labelledby="find-h">
+  <h2 id="find-h">Findings</h2>
+  {% if findings_error %}
+    <p class="error">{{ findings_error }}</p>
+  {% else %}
+  <form class="filters" method="get" action="/">
+    <label>Status
+      <select name="status"><option value="">any</option>{% for s in findings.options.status %}<option value="{{ s }}"{% if filters.status == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+    </label>
+    <label>Region
+      <select name="region"><option value="">any</option>{% for r in findings.options.region %}<option value="{{ r }}"{% if filters.region == r %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+    </label>
+    <label>Owner
+      <select name="owner"><option value="">any</option>{% for o in findings.options.owner %}<option value="{{ o }}"{% if filters.owner == o %} selected{% endif %}>{{ o }}</option>{% endfor %}</select>
+    </label>
+    <button type="submit">Filter</button>
+    {% if filters.status or filters.region or filters.owner %}<a href="/">Clear</a>{% endif %}
+  </form>
+
+  <h3>Active <span class="unit">open / in progress / failed, by estimated waste</span></h3>
+  {% if not findings.active %}
+    <p class="empty">No active findings{% if filters.status or filters.region or filters.owner %} for this filter{% endif %}.</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Resource</th><th>Name</th><th>Type</th><th>Region</th><th>Owner</th><th>Project</th><th>Status</th><th>Step</th><th>Deadline (UTC)</th><th class="num">Est. USD/month</th><th class="num">Cost so far</th><th>Flags</th></tr></thead>
+    <tbody>
+    {% for f in findings.active %}
+      <tr>
+        <td><code>{{ f.resourceId }}</code></td>
+        <td>{{ f.name or "" }}</td>
+        <td>{{ f.findingType }}</td>
+        <td>{{ f.region or "" }}</td>
+        <td>{{ f.owner }}</td>
+        <td>{{ f.project }}</td>
+        <td><span class="badge badge-{{ f.status }}">{{ f.status }}</span>{% if f.executionUrl %} <a href="{{ f.executionUrl }}" rel="noopener noreferrer" target="_blank">execution</a>{% endif %}</td>
+        <td>{{ f.timelineStep or "—" }}</td>
+        <td>{{ f.deadlineAt|utc }}</td>
+        <td class="num">{% if f.estimatedMonthlyCost is not none %}{{ f.estimatedMonthlyCost|usd }}{% else %}<span class="muted">not estimated</span>{% endif %}</td>
+        <td class="num">{% if f.costSoFar is not none %}{{ f.costSoFar|usd }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if f.reportOnlyReason %}<span class="badge badge-report">report-only: {{ f.reportOnlyReason }}</span>{% endif %}{% if f.dryRun %} <span class="badge badge-dry">dry-run</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="meta">Cost so far = estimated monthly cost / 730 × hours since first seen (current episode).</p>
+  {% endif %}
+
+  <h3>Failed</h3>
+  {% if not findings.failed %}
+    <p class="empty">No failed timelines.</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Resource</th><th>Name</th><th>Type</th><th>Region</th><th>Owner</th><th>Failed step</th><th>Error</th><th class="num">Restarts</th></tr></thead>
+    <tbody>
+    {% for f in findings.failed %}
+      <tr>
+        <td><code>{{ f.resourceId }}</code></td>
+        <td>{{ f.name or "" }}</td>
+        <td>{{ f.findingType }}</td>
+        <td>{{ f.region or "" }}</td>
+        <td>{{ f.owner }}</td>
+        <td>{{ f.failedStep or "—" }}</td>
+        <td class="wrap">{{ f.errorMessage or "" }}</td>
+        <td class="num">{{ f.restartCount }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+
+  <h3>Remediated</h3>
+  {% if not findings.remediated %}
+    <p class="empty">Nothing remediated yet.</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Resource</th><th>Name</th><th>Type</th><th>Region</th><th>Owner</th><th class="num">Savings USD/month</th><th>Mode</th><th>Remediated (UTC)</th><th>Snapshot</th></tr></thead>
+    <tbody>
+    {% for f in findings.remediated %}
+      <tr>
+        <td><code>{{ f.resourceId }}</code></td>
+        <td>{{ f.name or "" }}</td>
+        <td>{{ f.findingType }}</td>
+        <td>{{ f.region or "" }}</td>
+        <td>{{ f.owner }}</td>
+        <td class="num">{% if f.realizedMonthlySavings is not none %}{{ f.realizedMonthlySavings|usd }}{% else %}<span class="muted">not estimated</span>{% endif %}</td>
+        <td>{% if f.dryRun is sameas false %}<span class="badge badge-real">real</span>{% else %}<span class="badge badge-dry">dry-run</span>{% endif %}</td>
+        <td>{{ f.remediatedAt|utc }}</td>
+        <td>{% if f.snapshotId %}<code>{{ f.snapshotId }}</code>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="meta">Dry-run (or unmarked) remediations count as potential savings, not realized.</p>
+  {% endif %}
+
+  <h3>Report-only and protected</h3>
+  {% if not findings.reportOnly %}
+    <p class="empty">No report-only findings.</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Resource</th><th>Name</th><th>Type</th><th>Region</th><th>Owner</th><th>Reason</th><th>Status</th><th class="num">Est. USD/month</th></tr></thead>
+    <tbody>
+    {% for f in findings.reportOnly %}
+      <tr>
+        <td><code>{{ f.resourceId }}</code></td>
+        <td>{{ f.name or "" }}</td>
+        <td>{{ f.findingType }}</td>
+        <td>{{ f.region or "" }}</td>
+        <td>{{ f.owner }}</td>
+        <td><span class="badge badge-report">{{ f.reportOnlyReason }}</span></td>
+        <td>{{ f.status }}</td>
+        <td class="num">{% if f.estimatedMonthlyCost is not none %}{{ f.estimatedMonthlyCost|usd }}{% else %}<span class="muted">not estimated</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+
+  <p class="meta">Resolved findings: <strong>{{ findings.resolvedCount }}</strong> (not listed).</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ activity #}
+<section aria-labelledby="recent-h">
+  <h2 id="recent-h">Recent activity <span class="unit">last {{ activity.recentDays if activity else 7 }} days, newest first, max {{ activity.recentMax if activity else 200 }}</span></h2>
+  {% if activity_error %}
+    <p class="error">{{ activity_error }}</p>
+  {% elif not activity.recent %}
+    <p class="empty">No audit entries in the last 7 days.</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Time (UTC)</th><th>Actor</th><th>Event</th><th>Resource</th><th>Type</th><th>Region</th><th>Result</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for e in activity.recent %}
+      <tr{% if e.sample %} class="row-sample"{% endif %}>
+        <td>{{ e.time|utc }}</td>
+        <td>{{ e.actor or "" }}{% if e.sample %} <span class="badge badge-sample">sample</span>{% endif %}</td>
+        <td>{{ e.event or "" }}{% if e.dryRun %} <span class="badge badge-dry">dry-run</span>{% endif %}</td>
+        <td><code>{{ e.resourceId or "" }}</code></td>
+        <td>{{ e.findingType or "" }}</td>
+        <td>{{ e.region or "" }}</td>
+        <td>{{ e.result or "" }}</td>
+        <td class="wrap details">{{ e.detailsText }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------------ budgets #}
+<section aria-labelledby="budget-h">
+  <h2 id="budget-h">Budget alerts <span class="unit">newest 20</span></h2>
+  {% if budgets_error %}
+    <p class="error">{{ budgets_error }}</p>
+  {% elif not budgets %}
+    <p class="empty">No budget alerts received yet (budgets and the alert subscriber come with #37).</p>
+  {% else %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Received (UTC)</th><th>Budget</th><th>Type</th><th class="num">Threshold</th><th>Message</th></tr></thead>
+    <tbody>
+    {% for a in budgets %}
+      <tr>
+        <td>{{ a.receivedAt|utc }}</td>
+        <td>{{ a.budgetName or "" }}</td>
+        <td>{{ a.thresholdType or "" }}</td>
+        <td class="num">{{ a.threshold if a.threshold is not none else "" }}</td>
+        <td class="wrap">{{ a.message or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>
+</main>
+<footer class="meta">Estimates are the Guardian's own (USD/month); the real bill comes from Cost Explorer. The dashboard never changes resources: actions go through the email links.</footer>
+</body>
+</html>
