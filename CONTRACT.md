@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.12 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.13 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -180,10 +180,17 @@ Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>
 |---|---|---|---|
 | `<prefix>creator-lookups` | `resourceId` | `region`, `creatorArn`, `email` (or absent), `result` (`found`/`unknown`), `method` (`RunInstances`/`AllocateAddress`/`CreateVolume`/`last-attached`/`Attach`/`Detach`), `lookedUpAt` | scanner → scanner |
 | `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt` | scanner → scanner |
-| `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `createdAt` | daily-summary → dashboard, digest |
+| `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `actionsTakenDryRun`, `createdAt` | daily-summary → dashboard, digest |
 | `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `project#untagged` \| `total`) | `amount` (N, USD **per day**, rounded to **4** decimals: an exception to §2's 2-decimal monthly money, since daily amounts are fractions of a cent), `estimated` (BOOL, Cost Explorer's `Estimated`), `fetchedAt` | daily-cost → dashboard, digest |
 | `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold`, `message`, `day` | budget-subscriber → dashboard, digest |
 | `<prefix>counters` | `counterId` (e.g. `bedrock#2026-11-20`) | `count` (N), `ttl` | dashboard (conditional update) |
+
+daily-summaries notes: one item per UTC day, overwritten by a re-run; the findings part is a snapshot at run time.
+Active = open / in_progress / failed (resolved ignored). Waste and its breakdowns exclude MISSING_TAGS and
+SNAPSHOT_REMINDER and include report-only; missing owner → `unknown`, missing project → `untagged`. `countsByType` /
+`openFindings` count active findings incl. MISSING_TAGS. `warningsSent` = notice_sent + final_warning_sent that day;
+`actionsTaken` = instance_stopped + volume_deleted that day, dry-run included (`actionsTakenDryRun` = those with
+dryRun true). A remediated finding without `dryRun` counts as dry-run.
 
 bill-history notes: amounts are usage cost **before credits** (Cost Explorer `UnblendedCost`, filter `RECORD_TYPE = Usage`;
 net of credits every amount would be ~$0). Spend without a `project` tag is `project#untagged`. `total` = sum of
@@ -195,6 +202,7 @@ that day's `service#…` rows and is written for every fetched day, even when 0.
 - **Realized savings:** `realizedMonthlySavings` of findings **currently** `remediated` **with `dryRun = false`**.
   A finding that leaves `remediated` (real restart, terminated) stops counting.
 - **Potential savings:** findings `open` / `in_progress` (not report-only) **plus** `remediated` with `dryRun = true`.
+  The potential savings of a dry-run `remediated` finding = its `realizedMonthlySavings` (else `estimatedMonthlyCost`).
 
 ## 4. Lambda interfaces (JSON events)
 
@@ -453,3 +461,5 @@ budget amounts.
   generation; §4.5 timeline writes timeline_started / timeline_stopped, new `actor` argument (#29 follow-up).
 - v2.12 — §3.5 bill-history amounts per day (4 decimals, usage before credits, project#untagged);
   §4.7 daily-cost `days`; §8 dashboard takes `dlq_arn` (#27).
+- v2.13 — §3.5 daily-summaries rules and new `actionsTakenDryRun`; §3.6 potential savings of dry-run
+  remediated findings; SNAPSHOT_REMINDER not waste; missing dryRun = dry-run (#28).

@@ -3,3 +3,7 @@
 output "daily_cost_function_arn" {
   value = aws_lambda_function.daily_cost.arn
 }
+
+output "daily_summary_function_arn" {
+  value = aws_lambda_function.daily_summary.arn
+}
