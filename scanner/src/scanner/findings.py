@@ -1,7 +1,8 @@
 """Writes findings to <prefix>findings exactly per CONTRACT §3.1.
 
 The scanner owns the descriptive attributes (resourceType, region, owner, ownerSource, project, name,
-classification, estimatedMonthlyCost, missingTags, firstSeenAt, lastSeenAt). It never touches generation,
+classification, estimatedMonthlyCost, estimatedSnapshotMonthlyCost, missingTags, firstSeenAt, lastSeenAt).
+It never touches generation,
 execution fields, timelineStep or counters, and only sets `status` on a new finding (if_not_exists).
 """
 
@@ -14,9 +15,9 @@ _clients = {}
 
 # Attributes the scanner writes from what it sees. Absent values are REMOVEd so a deleted tag disappears.
 SCANNER_ATTRIBUTES = ("resourceType", "region", "owner", "ownerSource", "project", "name", "classification",
-                      "estimatedMonthlyCost", "missingTags")
-# Only REMOVEd when the scan knows them to be absent (estimatedMonthlyCost: stub returns None → leave alone).
-NEVER_REMOVE = ("estimatedMonthlyCost",)
+                      "estimatedMonthlyCost", "estimatedSnapshotMonthlyCost", "missingTags")
+# Never REMOVEd: None means "could not price this scan" (pricing logs price_unknown), so the last estimate stays.
+NEVER_REMOVE = ("estimatedMonthlyCost", "estimatedSnapshotMonthlyCost")
 
 
 def table():
@@ -67,8 +68,9 @@ def upsert(resource_id, finding_type, attrs, now):
     item.update({k: v for k, v in attrs.items() if v is not None})
     item.update({"resourceId": resource_id, "findingType": finding_type, "lastSeenAt": now,
                  "status": old.get("status", "open"), "firstSeenAt": old.get("firstSeenAt", now)})
-    if "estimatedMonthlyCost" in old and attrs.get("estimatedMonthlyCost") is None:
-        item["estimatedMonthlyCost"] = old["estimatedMonthlyCost"]
+    for key in NEVER_REMOVE:
+        if key in old and attrs.get(key) is None:
+            item[key] = old[key]
     log(resource_id, finding_type, "upsert_finding", "new" if not old else "seen", status=item["status"])
     return (not old), item
 

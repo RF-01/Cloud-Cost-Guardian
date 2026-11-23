@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.7 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.8 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -60,7 +60,8 @@ Attributes:
 | `status` | S | see §3.2 | `open` \| `in_progress` \| `remediated` \| `resolved` \| `failed` |
 | `reportOnlyReason` | S | scanner, action, engine workflow (re-check) | `protected` \| `autoscaling` \| absent |
 | `classification` | S | scanner | EC2 only: `idle` \| `underused` \| `periodic` |
-| `estimatedMonthlyCost` | N | scanner | absent for `MISSING_TAGS` |
+| `estimatedMonthlyCost` | N | scanner | absent for `MISSING_TAGS` or if never priced; a later scan that can't price it keeps the last estimate (logged as `price_unknown`). EC2: compute + auto-assigned public IPv4 (what stopping saves; EBS and Elastic IPs stay billed); EBS: storage + provisioned IOPS / throughput; EIP: public IPv4 hours. 730 h per month. |
+| `estimatedSnapshotMonthlyCost` | N | scanner | `EBS_UNATTACHED` only: size × snapshot GB-month price (upper bound); the EBS timeline sets realized savings = `estimatedMonthlyCost` − this |
 | `missingTags` | L | scanner | `MISSING_TAGS` only, e.g. `["owner","project"]` |
 | `firstSeenAt` | S | scanner | start of the current episode; reset on reopen (§3.2) |
 | `lastSeenAt` | S | scanner | every scan that still sees the problem |
@@ -413,3 +414,4 @@ budget amounts · Bedrock model, cap and answer length.
   values allowed, Notify role scoped by ses:FromAddress and dynamodb:Attributes; §4.2 elasticIps tolerance.
 - v2.7 — §3.2 Catch rules (failedStep / errorMessage, condition, failure after remediation); §3.3
   workflow_failed details.
+- v2.8 — §3.1 `estimatedSnapshotMonthlyCost`; what `estimatedMonthlyCost` covers per resource type.

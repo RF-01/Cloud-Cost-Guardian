@@ -2,7 +2,7 @@
 
 Task #20: one region only (the first of SCAN_REGIONS; us-west-2 for "all"). `scan_region` is the unit that
 task #22 loops over / parallelizes. Not yet here: tag copying (#33), CloudTrail lookup (#34),
-resolve / reopen (#35), emails (#36), real prices (#21).
+resolve / reopen (#35), emails (#36). Cost estimates come from the internal price table (pricing.py, #21).
 """
 
 import json
@@ -182,7 +182,9 @@ def _scan_volumes(scan, ec2, scope):
             scan.missing_tags(vid, "ebs", tags, attrs)
             if vol["State"] == "available":
                 scan.record(vid, "EBS_UNATTACHED",
-                            dict(attrs, estimatedMonthlyCost=pricing.estimate("ebs", scan.region, vol)),
+                            dict(attrs, estimatedMonthlyCost=pricing.estimate("ebs", scan.region, vol),
+                                 estimatedSnapshotMonthlyCost=pricing.estimate_snapshot(
+                                     scan.region, vol.get("Size"), resource_id=vid)),
                             report_only=_report_only_reason(tags))
 
 

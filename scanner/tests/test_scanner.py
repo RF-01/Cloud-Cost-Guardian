@@ -88,6 +88,14 @@ def put_metrics(aws, iid, scan_at, cpu=(1.0,), network=1000.0, disk=10.0):
              "Timestamp": ts, "Value": disk / 2, "Unit": "Count"}])
 
 
+@pytest.fixture
+def linux(monkeypatch):
+    """moto leaves PlatformDetails out (real EC2 always sets it); mark the described instances Linux."""
+    original = handler._all_instances
+    monkeypatch.setattr(handler, "_all_instances",
+                        lambda ec2: [dict(i, PlatformDetails="Linux/UNIX") for i in original(ec2)])
+
+
 def get(aws, rid, ftype):
     return aws["table"].get_item(Key={"resourceId": rid, "findingType": ftype}).get("Item")
 
@@ -103,7 +111,7 @@ def logs(capsys):
 # ---------------------------------------------------------------- EC2 classification
 
 
-def test_idle_instance_creates_ec2_idle_finding(aws):
+def test_idle_instance_creates_ec2_idle_finding(aws, linux):
     iid = launch(aws, OWNED)
     scan_at = later()
     put_metrics(aws, iid, scan_at)
@@ -116,10 +124,33 @@ def test_idle_instance_creates_ec2_idle_finding(aws):
     assert item["owner"] == "alice@example.com" and item["ownerSource"] == "tag"
     assert item["project"] == "demo" and item["name"] == "web-1"
     assert item["firstSeenAt"] == item["lastSeenAt"] == scan_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-    assert "estimatedMonthlyCost" not in item  # pricing stub (#21)
+    # Real table: t3.micro in us-west-2 x 730 h. moto's public IP has the account as IpOwnerId (like an Elastic
+    # IP), so no IPv4 is added.
+    assert item["estimatedMonthlyCost"] == Decimal("7.59")
+    assert "estimatedSnapshotMonthlyCost" not in item  # EBS only
     assert "generation" not in item and "reportOnlyReason" not in item
     assert summary["findings"] == {"EC2_IDLE": 1}
     assert summary["timelines"] == {"skipped_no_state_machine": 1}
+
+
+def test_non_linux_instance_has_no_estimate(aws, capsys):
+    iid = launch(aws, OWNED)  # moto: no PlatformDetails
+    scan_at = later()
+    put_metrics(aws, iid, scan_at)
+    handler.scan_region(REGION, now=scan_at)
+    assert "estimatedMonthlyCost" not in get(aws, iid, "EC2_IDLE")
+    [unknown] = [r for r in logs(capsys) if r["action"] == "price_unknown"]
+    assert unknown["resourceId"] == iid and "platform" in unknown["reason"]
+
+
+def test_estimate_kept_when_a_later_scan_cannot_price(aws, linux, monkeypatch):
+    iid = launch(aws, OWNED)
+    scan_at = later()
+    put_metrics(aws, iid, scan_at)
+    handler.scan_region(REGION, now=scan_at)
+    monkeypatch.setattr(handler.pricing, "estimate", lambda *a, **k: None)
+    handler.scan_region(REGION, now=scan_at + timedelta(minutes=5))
+    assert get(aws, iid, "EC2_IDLE")["estimatedMonthlyCost"] == Decimal("7.59")
 
 
 @pytest.mark.parametrize("cpu,network,disk,expected", [
@@ -192,6 +223,19 @@ def test_unattached_volume(aws):
     assert item["owner"] == "bob@example.com"
     assert [k for k in all_findings(aws) if k[1] == "EBS_UNATTACHED"] == [(vol, "EBS_UNATTACHED")]
     assert summary["findings"]["EBS_UNATTACHED"] == 1
+    vtype = aws["ec2"].describe_volumes(VolumeIds=[vol])["Volumes"][0]["VolumeType"]
+    assert vtype == "gp2"  # moto's default
+    assert item["estimatedMonthlyCost"] == Decimal("0.80")  # 8 GB x $0.10 (us-west-2 gp2)
+    assert item["estimatedSnapshotMonthlyCost"] == Decimal("0.40")  # 8 GB x $0.05
+
+
+def test_unattached_gp3_with_extra_iops(aws):
+    vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=100, VolumeType="gp3", Iops=4000,
+                                   TagSpecifications=[{"ResourceType": "volume", "Tags": tag_list(OWNED)}])
+    handler.scan_region(REGION, now=later())
+    item = get(aws, vol["VolumeId"], "EBS_UNATTACHED")
+    assert item["estimatedMonthlyCost"] == Decimal("13.00")  # 100 x 0.08 + 1,000 IOPS x 0.005
+    assert item["estimatedSnapshotMonthlyCost"] == Decimal("5.00")
 
 
 def test_unassociated_eip(aws):
@@ -201,6 +245,8 @@ def test_unassociated_eip(aws):
     item = get(aws, alloc["AllocationId"], "EIP_UNASSOCIATED")
     assert item["resourceType"] == "eip" and item["status"] == "open"
     assert "reportOnlyReason" not in item  # EIP findings are report-only by type, no reason needed
+    assert item["estimatedMonthlyCost"] == Decimal("3.65")  # $0.005 x 730 h
+    assert "estimatedSnapshotMonthlyCost" not in item
 
 
 def _eip_on_stopped(aws):
@@ -263,7 +309,7 @@ def test_missing_tags(aws):
     assert vol_item["ownerSource"] == "unknown" and "owner" not in vol_item
     assert get(aws, alloc, "MISSING_TAGS")["resourceType"] == "eip"
     assert get(aws, root_volume(aws, iid), "MISSING_TAGS") is None  # fully tagged
-    assert "estimatedMonthlyCost" not in vol_item
+    assert "estimatedMonthlyCost" not in vol_item and "estimatedSnapshotMonthlyCost" not in vol_item
 
 
 # ---------------------------------------------------------------- dev scope, report-only

@@ -703,6 +703,7 @@ Emails to individual owners are sent with **Amazon SES**. SNS is kept only for a
 - Untagged resources are flagged without a cost estimate.
 - EBS is billed per provisioned GB-month regardless of usage; a running EC2 instance is billed per second regardless of CPU usage.
 - **Detection never uses the Cost Explorer API** (billed per request, ~24 h delay); it is only used once a day for bill history (§11.3).
+- The price table is generated from the AWS Price List API by `scanner/tools/build_price_table.py` into `scanner/src/scanner/prices_data.py` (all default-enabled regions; Linux on-demand, shared tenancy) and refreshed by re-running the script. EC2 estimates cover compute and auto-assigned public IPv4 (released on stop); unpriced cases (other OS, unknown type or region) get no estimate.
 
 ### 11.2 Spending limits — AWS Budgets
 
@@ -1084,7 +1085,7 @@ Decide before building the part that needs it:
 - Detection thresholds for CPU, network and disk (tuned during testing). Initial values (common/idle.py, set during testing Nov 22): CPU avg < 5% and max < 20%, network < 2 MB/hour, disk < 3,600 ops/hour (1 op/s).
 - Allowed instance types for the guardrails.
 - Budget amounts per project and alert thresholds (the account budget is $5).
-- Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers.
+- Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers. *(Decided: price table covers all default-enabled regions.)*
 
 *Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox).*
 

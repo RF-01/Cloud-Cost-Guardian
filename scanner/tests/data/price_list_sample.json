@@ -1,0 +1,1766 @@
+{
+ "us-east-1": {
+  "ebs": [
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsBurstPerformance": "Hundreds",
+      "maxIopsvolume": "40 - 200",
+      "maxThroughputvolume": "40 - 90 MB/sec",
+      "maxVolumeSize": "1 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "HDD-backed",
+      "usagetype": "EBS:VolumeUsage",
+      "volumeApiName": "standard",
+      "volumeType": "Magnetic"
+     },
+     "productFamily": "Storage",
+     "sku": "269VXUCZZ7E6JNXT"
+    },
+    "terms": {
+     "OnDemand": {
+      "269VXUCZZ7E6JNXT.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "269VXUCZZ7E6JNXT.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per GB-month of Magnetic provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0500000000"
+         },
+         "rateCode": "269VXUCZZ7E6JNXT.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "269VXUCZZ7E6JNXT",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsvolume": "250 - based on 1 MiB I/O size",
+      "maxThroughputvolume": "250 MiB/s",
+      "maxVolumeSize": "16 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "HDD-backed",
+      "usagetype": "EBS:VolumeUsage.sc1",
+      "volumeApiName": "sc1",
+      "volumeType": "Cold HDD"
+     },
+     "productFamily": "Storage",
+     "sku": "6U5VMCFHHMTH3QW6"
+    },
+    "terms": {
+     "OnDemand": {
+      "6U5VMCFHHMTH3QW6.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "6U5VMCFHHMTH3QW6.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.015 per GB-month of Cold HDD (sc1) provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0150000000"
+         },
+         "rateCode": "6U5VMCFHHMTH3QW6.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "6U5VMCFHHMTH3QW6",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsvolume": "256000",
+      "maxThroughputvolume": "4000 MiB/s",
+      "maxVolumeSize": "64 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "SSD-backed",
+      "usagetype": "EBS:VolumeUsage.io2",
+      "volumeApiName": "io2",
+      "volumeType": "Provisioned IOPS"
+     },
+     "productFamily": "Storage",
+     "sku": "6V576P37PS7K7KYU"
+    },
+    "terms": {
+     "OnDemand": {
+      "6V576P37PS7K7KYU.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "6V576P37PS7K7KYU.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.125 per GB-month of Provisioned IOPS SSD (io2)  provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.1250000000"
+         },
+         "rateCode": "6V576P37PS7K7KYU.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-month"
+        }
+       },
+       "sku": "6V576P37PS7K7KYU",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsBurstPerformance": "3000 for volumes <= 1 TiB",
+      "maxIopsvolume": "16000",
+      "maxThroughputvolume": "250 MiB/s",
+      "maxVolumeSize": "16 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "SSD-backed",
+      "usagetype": "EBS:VolumeUsage.gp2",
+      "volumeApiName": "gp2",
+      "volumeType": "General Purpose"
+     },
+     "productFamily": "Storage",
+     "sku": "HY3BZPP2B6K8MSJF"
+    },
+    "terms": {
+     "OnDemand": {
+      "HY3BZPP2B6K8MSJF.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "HY3BZPP2B6K8MSJF.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.10 per GB-month of General Purpose SSD (gp2) provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.1000000000"
+         },
+         "rateCode": "HY3BZPP2B6K8MSJF.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "HY3BZPP2B6K8MSJF",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsvolume": "80000",
+      "maxThroughputvolume": "2000 MiB/s",
+      "maxVolumeSize": "64 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "SSD-backed",
+      "usagetype": "EBS:VolumeUsage.gp3",
+      "volumeApiName": "gp3",
+      "volumeType": "General Purpose"
+     },
+     "productFamily": "Storage",
+     "sku": "JG3KUJMBRGHV3N8G"
+    },
+    "terms": {
+     "OnDemand": {
+      "JG3KUJMBRGHV3N8G.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "JG3KUJMBRGHV3N8G.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.08 per GB-month of General Purpose (gp3) provisioned storage - US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0800000000"
+         },
+         "rateCode": "JG3KUJMBRGHV3N8G.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "JG3KUJMBRGHV3N8G",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsvolume": "64000",
+      "maxThroughputvolume": "1000 MiB/s",
+      "maxVolumeSize": "16 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "SSD-backed",
+      "usagetype": "EBS:VolumeUsage.piops",
+      "volumeApiName": "io1",
+      "volumeType": "Provisioned IOPS"
+     },
+     "productFamily": "Storage",
+     "sku": "JR4AM7VS63CTEPMN"
+    },
+    "terms": {
+     "OnDemand": {
+      "JR4AM7VS63CTEPMN.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "JR4AM7VS63CTEPMN.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.125 per GB-month of Provisioned IOPS SSD (io1)  provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.1250000000"
+         },
+         "rateCode": "JR4AM7VS63CTEPMN.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "JR4AM7VS63CTEPMN",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Storage",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "maxIopsvolume": "500 - based on 1 MiB I/O size",
+      "maxThroughputvolume": "500 MiB/s",
+      "maxVolumeSize": "16 TiB",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "HDD-backed",
+      "usagetype": "EBS:VolumeUsage.st1",
+      "volumeApiName": "st1",
+      "volumeType": "Throughput Optimized HDD"
+     },
+     "productFamily": "Storage",
+     "sku": "YQT3C842QHBG6XCU"
+    },
+    "terms": {
+     "OnDemand": {
+      "YQT3C842QHBG6XCU.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "YQT3C842QHBG6XCU.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.045 per GB-month of Throughput Optimized HDD (st1) provisioned storage - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0450000000"
+         },
+         "rateCode": "YQT3C842QHBG6XCU.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "YQT3C842QHBG6XCU",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS IOPS",
+      "groupDescription": "IOPS",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-IOPS.gp3",
+      "volumeApiName": "gp3"
+     },
+     "productFamily": "System Operation",
+     "sku": "7Q58NR58VQEASA4W"
+    },
+    "terms": {
+     "OnDemand": {
+      "7Q58NR58VQEASA4W.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "7Q58NR58VQEASA4W.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.005 per provisioned IOPS-month of gp3 - US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0050000000"
+         },
+         "rateCode": "7Q58NR58VQEASA4W.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOPS-Mo"
+        }
+       },
+       "sku": "7Q58NR58VQEASA4W",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS IOPS Tier 3",
+      "groupDescription": "IOPS",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-IOPS.io2.tier3",
+      "volumeApiName": "io2"
+     },
+     "productFamily": "System Operation",
+     "sku": "AX8G343U7JZBRKJB"
+    },
+    "terms": {
+     "OnDemand": {
+      "AX8G343U7JZBRKJB.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "AX8G343U7JZBRKJB.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.032 per IOPS-month provisioned (io2) for over 64000 IOPS for a volume that has provisioned greater an 64000 IOPS",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0318500000"
+         },
+         "rateCode": "AX8G343U7JZBRKJB.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOPS-Mo"
+        }
+       },
+       "sku": "AX8G343U7JZBRKJB",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS IOPS",
+      "groupDescription": "IOPS",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-IOPS.piops",
+      "volumeApiName": "io1"
+     },
+     "productFamily": "System Operation",
+     "sku": "D8RDVC722HKNR55G"
+    },
+    "terms": {
+     "OnDemand": {
+      "D8RDVC722HKNR55G.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "D8RDVC722HKNR55G.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.065 per IOPS-month provisioned - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0650000000"
+         },
+         "rateCode": "D8RDVC722HKNR55G.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOPS-Mo"
+        }
+       },
+       "sku": "D8RDVC722HKNR55G",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 1",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier1"
+     },
+     "productFamily": "System Operation",
+     "sku": "EBJ5G6KM7HXQUUE9"
+    },
+    "terms": {
+     "OnDemand": {
+      "EBJ5G6KM7HXQUUE9.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "EBJ5G6KM7HXQUUE9.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.020 USD per GB for completion duration 15 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0200000000"
+         },
+         "rateCode": "EBJ5G6KM7HXQUUE9.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "EBJ5G6KM7HXQUUE9",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 6",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier6"
+     },
+     "productFamily": "System Operation",
+     "sku": "GE3WC4JZMZQT59AR"
+    },
+    "terms": {
+     "OnDemand": {
+      "GE3WC4JZMZQT59AR.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "GE3WC4JZMZQT59AR.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.010 USD per GB for completion duration 480-959 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0100000000"
+         },
+         "rateCode": "GE3WC4JZMZQT59AR.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "GE3WC4JZMZQT59AR",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS IOPS Tier 2",
+      "groupDescription": "IOPS",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-IOPS.io2.tier2",
+      "volumeApiName": "io2"
+     },
+     "productFamily": "System Operation",
+     "sku": "KDKG2R3W4NMV7CHP"
+    },
+    "terms": {
+     "OnDemand": {
+      "KDKG2R3W4NMV7CHP.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "KDKG2R3W4NMV7CHP.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0455 per IOPS-month provisioned (io2) for 32001-64000 IOPS for a volume that has provisioned greater an 32000 IOPS",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0455000000"
+         },
+         "rateCode": "KDKG2R3W4NMV7CHP.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOPS-Mo"
+        }
+       },
+       "sku": "KDKG2R3W4NMV7CHP",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 4",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier4"
+     },
+     "productFamily": "System Operation",
+     "sku": "M22VMJSCT28F4RAP"
+    },
+    "terms": {
+     "OnDemand": {
+      "M22VMJSCT28F4RAP.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "M22VMJSCT28F4RAP.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.014 USD per GB for completion duration 120-239 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0140000000"
+         },
+         "rateCode": "M22VMJSCT28F4RAP.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "M22VMJSCT28F4RAP",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 3",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier3"
+     },
+     "productFamily": "System Operation",
+     "sku": "PGUC8MG9J24K9MZV"
+    },
+    "terms": {
+     "OnDemand": {
+      "PGUC8MG9J24K9MZV.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "PGUC8MG9J24K9MZV.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.016 USD per GB for completion duration 60-119 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0160000000"
+         },
+         "rateCode": "PGUC8MG9J24K9MZV.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "PGUC8MG9J24K9MZV",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 7",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier7"
+     },
+     "productFamily": "System Operation",
+     "sku": "U76K6MD4GPND4GAE"
+    },
+    "terms": {
+     "OnDemand": {
+      "U76K6MD4GPND4GAE.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "U76K6MD4GPND4GAE.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.005 USD per GB for completion duration 960 mins and above for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0050000000"
+         },
+         "rateCode": "U76K6MD4GPND4GAE.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "U76K6MD4GPND4GAE",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 5",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier5"
+     },
+     "productFamily": "System Operation",
+     "sku": "V5FJAU3SRDVZ4KDX"
+    },
+    "terms": {
+     "OnDemand": {
+      "V5FJAU3SRDVZ4KDX.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "V5FJAU3SRDVZ4KDX.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.012 USD per GB for completion duration 240-479 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0120000000"
+         },
+         "rateCode": "V5FJAU3SRDVZ4KDX.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "V5FJAU3SRDVZ4KDX",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "EBS Time Based Copy Tier 2",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "toLocation": "US East (N. Virginia)",
+      "toRegionCode": "us-east-1",
+      "usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier2"
+     },
+     "productFamily": "System Operation",
+     "sku": "VHW7DT4KNTUMUMCS"
+    },
+    "terms": {
+     "OnDemand": {
+      "VHW7DT4KNTUMUMCS.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "VHW7DT4KNTUMUMCS.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "0.018 USD per GB for completion duration 30-59 mins for Time based Snapshot Copy in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0180000000"
+         },
+         "rateCode": "VHW7DT4KNTUMUMCS.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "VHW7DT4KNTUMUMCS",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS I/O Requests",
+      "groupDescription": "Input/Output Operation",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "No",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeIOUsage",
+      "volumeApiName": "standard"
+     },
+     "productFamily": "System Operation",
+     "sku": "VV3ASRE8RPAY7C9U"
+    },
+    "terms": {
+     "OnDemand": {
+      "VV3ASRE8RPAY7C9U.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "VV3ASRE8RPAY7C9U.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per 1 million I/O requests - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0000000500"
+         },
+         "rateCode": "VV3ASRE8RPAY7C9U.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOs"
+        }
+       },
+       "sku": "VV3ASRE8RPAY7C9U",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS IOPS",
+      "groupDescription": "IOPS",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-IOPS.io2",
+      "volumeApiName": "io2"
+     },
+     "productFamily": "System Operation",
+     "sku": "X9AGQNCQXFA9Q8XZ"
+    },
+    "terms": {
+     "OnDemand": {
+      "X9AGQNCQXFA9Q8XZ.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "X9AGQNCQXFA9Q8XZ.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.065 per IOPS-month provisioned (io2) - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0650000000"
+         },
+         "rateCode": "X9AGQNCQXFA9Q8XZ.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "IOPS-Mo"
+        }
+       },
+       "sku": "X9AGQNCQXFA9Q8XZ",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Throughput",
+      "groupDescription": "Charge per Provisioned mbps",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "EBS:VolumeP-Throughput.gp3",
+      "volumeApiName": "gp3"
+     },
+     "productFamily": "Provisioned Throughput",
+     "sku": "SQUFRQX4K92S4SBB"
+    },
+    "terms": {
+     "OnDemand": {
+      "SQUFRQX4K92S4SBB.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "SQUFRQX4K92S4SBB.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.04 per provisioned MiBps-month of gp3 - US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "40.9600000000"
+         },
+         "rateCode": "SQUFRQX4K92S4SBB.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GiBps-mo"
+        }
+       },
+       "sku": "SQUFRQX4K92S4SBB",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3",
+      "usagetype": "EBS:SnapshotUsage"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "7U7TWP44UP36AT3R"
+    },
+    "terms": {
+     "OnDemand": {
+      "7U7TWP44UP36AT3R.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "7U7TWP44UP36AT3R.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per GB-Month of snapshot data stored - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0500000000"
+         },
+         "rateCode": "7U7TWP44UP36AT3R.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "7U7TWP44UP36AT3R",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveRetrieval",
+      "storageMedia": "Amazon S3",
+      "usagetype": "EBS:SnapshotArchiveRetrieval"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "DDSCQ4YGF66NWWRJ"
+    },
+    "terms": {
+     "OnDemand": {
+      "DDSCQ4YGF66NWWRJ.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "DDSCQ4YGF66NWWRJ.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.03 per GB of snapshot archive data retrieved - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0300000000"
+         },
+         "rateCode": "DDSCQ4YGF66NWWRJ.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "DDSCQ4YGF66NWWRJ",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveEarlyDelete",
+      "storageMedia": "Amazon S3",
+      "usagetype": "EBS:SnapshotArchiveEarlyDelete"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "GHTDRQFFXQZVJNXF"
+    },
+    "terms": {
+     "OnDemand": {
+      "GHTDRQFFXQZVJNXF.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "GHTDRQFFXQZVJNXF.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0125 per GB-Month of snapshot archive data deleted earlier than 90 days - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0125000000"
+         },
+         "rateCode": "GHTDRQFFXQZVJNXF.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "GHTDRQFFXQZVJNXF",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Outposts",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3 Outpost",
+      "usagetype": "USE1-EBS:SnapshotUsage.outposts"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "PXAF4HC3TVCEH5XQ"
+    },
+    "terms": {
+     "OnDemand": {
+      "PXAF4HC3TVCEH5XQ.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "PXAF4HC3TVCEH5XQ.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.027 per GB-Mo for EBS local snapshots on Outposts in US East (N. Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0270000000"
+         },
+         "rateCode": "PXAF4HC3TVCEH5XQ.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "PXAF4HC3TVCEH5XQ",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveStorage",
+      "storageMedia": "Amazon S3",
+      "usagetype": "EBS:SnapshotArchiveStorage"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "TQQM6CHBJQ7MKT24"
+    },
+    "terms": {
+     "OnDemand": {
+      "TQQM6CHBJQ7MKT24.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "TQQM6CHBJQ7MKT24.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0125 per GB-Month of snapshot archive data stored - US East (Northern Virginia)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0125000000"
+         },
+         "rateCode": "TQQM6CHBJQ7MKT24.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "TQQM6CHBJQ7MKT24",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3",
+      "usagetype": "EBS:SnapshotUsageUnderBilling"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "W339DBEHBVGTYPXR"
+    },
+    "terms": {
+     "OnDemand": {
+      "W339DBEHBVGTYPXR.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "W339DBEHBVGTYPXR.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per GB-Month of snapshot underbilling for April 30th",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0500000000"
+         },
+         "rateCode": "W339DBEHBVGTYPXR.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "W339DBEHBVGTYPXR",
+       "termAttributes": {}
+      }
+     }
+    }
+   }
+  ],
+  "ec2": [
+   {
+    "product": {
+     "attributes": {
+      "availabilityzone": "NA",
+      "capacitystatus": "Used",
+      "classicnetworkingsupport": "false",
+      "clockSpeed": "3.1 GHz",
+      "currentGeneration": "Yes",
+      "dedicatedEbsThroughput": "Up to 2085 Mbps",
+      "dedicatedEbsThroughputDescription": "87 Mbps",
+      "ecu": "NA",
+      "enhancedNetworkingSupported": "No",
+      "gpuMemory": "NA",
+      "instanceFamily": "General purpose",
+      "instanceFamilyCategory": "General Purpose",
+      "instanceType": "t3.micro",
+      "intelAvx2Available": "Yes",
+      "intelAvxAvailable": "Yes",
+      "intelTurboAvailable": "Yes",
+      "licenseModel": "No License required",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "marketoption": "OnDemand",
+      "memory": "1 GiB",
+      "networkPerformance": "Up to 5 Gigabit",
+      "normalizationSizeFactor": "0.5",
+      "operatingSystem": "Linux",
+      "operation": "RunInstances",
+      "physicalProcessor": "Intel Skylake E5 2686 v5",
+      "preInstalledSw": "NA",
+      "processorArchitecture": "64-bit",
+      "processorFeatures": "AVX; AVX2; Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storage": "EBS only",
+      "tenancy": "Shared",
+      "usagetype": "BoxUsage:t3.micro",
+      "vcpu": "2",
+      "vpcnetworkingsupport": "true"
+     },
+     "productFamily": "Compute Instance",
+     "sku": "CRAJUW7BTXFMT2UJ"
+    },
+    "terms": {
+     "OnDemand": {
+      "CRAJUW7BTXFMT2UJ.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "CRAJUW7BTXFMT2UJ.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0104 per On Demand Linux t3.micro Instance Hour",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0104000000"
+         },
+         "rateCode": "CRAJUW7BTXFMT2UJ.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "CRAJUW7BTXFMT2UJ",
+       "termAttributes": {}
+      }
+     }
+    }
+   }
+  ],
+  "vpc": [
+   {
+    "product": {
+     "attributes": {
+      "group": "VPCPublicIPv4Address",
+      "groupDescription": "Hourly charge for In-use Public IPv4 Addresses",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonVPC",
+      "servicename": "Amazon Virtual Private Cloud",
+      "usagetype": "USE1-PublicIPv4:InUseAddress"
+     },
+     "sku": "4GQUNXTFWVSGPUZK"
+    },
+    "terms": {
+     "OnDemand": {
+      "4GQUNXTFWVSGPUZK.JRTCKXETXF": {
+       "effectiveDate": "2026-11-17T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "4GQUNXTFWVSGPUZK.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.005 per In-use public IPv4 address per hour",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0050000000"
+         },
+         "rateCode": "4GQUNXTFWVSGPUZK.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "4GQUNXTFWVSGPUZK",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "VPCIPv4ContiguousBlocks",
+      "groupDescription": "Hourly charge for IPv4 address in a contiguous block of IPv4 address",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "ProvisionIpamPoolCidr",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonVPC",
+      "servicename": "Amazon Virtual Private Cloud",
+      "usagetype": "USE1-PublicIPv4:ContiguousBlock"
+     },
+     "sku": "G45CEDSGU2ER8WPQ"
+    },
+    "terms": {
+     "OnDemand": {
+      "G45CEDSGU2ER8WPQ.JRTCKXETXF": {
+       "effectiveDate": "2026-11-17T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "G45CEDSGU2ER8WPQ.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.008 per hour per IPv4 address in contiguous IPv4 block",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0080000000"
+         },
+         "rateCode": "G45CEDSGU2ER8WPQ.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "G45CEDSGU2ER8WPQ",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "group": "VPCPublicIPv4Address",
+      "groupDescription": "Hourly charge for Idle Public IPv4 Addresses",
+      "location": "US East (N. Virginia)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-east-1",
+      "servicecode": "AmazonVPC",
+      "servicename": "Amazon Virtual Private Cloud",
+      "usagetype": "USE1-PublicIPv4:IdleAddress"
+     },
+     "sku": "T6YDQKTMVWKNJFJ8"
+    },
+    "terms": {
+     "OnDemand": {
+      "T6YDQKTMVWKNJFJ8.JRTCKXETXF": {
+       "effectiveDate": "2026-11-17T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "T6YDQKTMVWKNJFJ8.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.005 per Idle public IPv4 address per hour",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0050000000"
+         },
+         "rateCode": "T6YDQKTMVWKNJFJ8.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "T6YDQKTMVWKNJFJ8",
+       "termAttributes": {}
+      }
+     }
+    }
+   }
+  ]
+ },
+ "us-west-2": {
+  "ebs": [
+   {
+    "product": {
+     "attributes": {
+      "ebsAzConfiguration": "single-az",
+      "group": "EBS Throughput",
+      "groupDescription": "Charge per Provisioned mbps",
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "provisioned": "Yes",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "usagetype": "USW2-EBS:VolumeP-Throughput.gp3",
+      "volumeApiName": "gp3"
+     },
+     "productFamily": "Provisioned Throughput",
+     "sku": "3MQHJKUUZSKTF82F"
+    },
+    "terms": {
+     "OnDemand": {
+      "3MQHJKUUZSKTF82F.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "3MQHJKUUZSKTF82F.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.04 per provisioned MiBps-month of gp3 - US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "40.9600000000"
+         },
+         "rateCode": "3MQHJKUUZSKTF82F.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GiBps-mo"
+        }
+       },
+       "sku": "3MQHJKUUZSKTF82F",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3",
+      "usagetype": "USW2-EBS:SnapshotUnderBilling"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "3AJTRRC7AHBFRH3K"
+    },
+    "terms": {
+     "OnDemand": {
+      "3AJTRRC7AHBFRH3K.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "3AJTRRC7AHBFRH3K.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per GB-Month of Snapshot underbilling for August 31st",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0500000000"
+         },
+         "rateCode": "3AJTRRC7AHBFRH3K.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "3AJTRRC7AHBFRH3K",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveEarlyDelete",
+      "storageMedia": "Amazon S3",
+      "usagetype": "USW2-EBS:SnapshotArchiveEarlyDelete"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "4NB7XUS6KJMT4723"
+    },
+    "terms": {
+     "OnDemand": {
+      "4NB7XUS6KJMT4723.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "4NB7XUS6KJMT4723.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0125 per GB-Month of snapshot archive data deleted earlier than 90 days - US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0125000000"
+         },
+         "rateCode": "4NB7XUS6KJMT4723.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "4NB7XUS6KJMT4723",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Outposts",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3 Outpost",
+      "usagetype": "USW2-EBS:SnapshotUsage.outposts"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "96876HJNB2H4SRHY"
+    },
+    "terms": {
+     "OnDemand": {
+      "96876HJNB2H4SRHY.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "96876HJNB2H4SRHY.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.027 per GB-Mo for EBS local snapshots on Outposts in US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0270000000"
+         },
+         "rateCode": "96876HJNB2H4SRHY.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "96876HJNB2H4SRHY",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storageMedia": "Amazon S3",
+      "usagetype": "USW2-EBS:SnapshotUsage"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "CNYETXBBP73CTYPG"
+    },
+    "terms": {
+     "OnDemand": {
+      "CNYETXBBP73CTYPG.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "CNYETXBBP73CTYPG.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.05 per GB-Month of snapshot data stored - US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0500000000"
+         },
+         "rateCode": "CNYETXBBP73CTYPG.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "CNYETXBBP73CTYPG",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveStorage",
+      "storageMedia": "Amazon S3",
+      "usagetype": "USW2-EBS:SnapshotArchiveStorage"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "EKYUJ5H2RS3BRXRR"
+    },
+    "terms": {
+     "OnDemand": {
+      "EKYUJ5H2RS3BRXRR.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "EKYUJ5H2RS3BRXRR.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0125 per GB-Month of snapshot archive data stored - US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0125000000"
+         },
+         "rateCode": "EKYUJ5H2RS3BRXRR.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB-Mo"
+        }
+       },
+       "sku": "EKYUJ5H2RS3BRXRR",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "operation": "",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "snapshotarchivefeetype": "SnapshotArchiveRetrieval",
+      "storageMedia": "Amazon S3",
+      "usagetype": "USW2-EBS:SnapshotArchiveRetrieval"
+     },
+     "productFamily": "Storage Snapshot",
+     "sku": "X6KGVSR38VVQT952"
+    },
+    "terms": {
+     "OnDemand": {
+      "X6KGVSR38VVQT952.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "X6KGVSR38VVQT952.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.03 per GB of snapshot archive data retrieved - US West (Oregon)",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0300000000"
+         },
+         "rateCode": "X6KGVSR38VVQT952.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "GB"
+        }
+       },
+       "sku": "X6KGVSR38VVQT952",
+       "termAttributes": {}
+      }
+     }
+    }
+   }
+  ],
+  "ec2": [
+   {
+    "product": {
+     "attributes": {
+      "availabilityzone": "NA",
+      "capacitystatus": "Used",
+      "classicnetworkingsupport": "false",
+      "clockSpeed": "3.1 GHz",
+      "currentGeneration": "Yes",
+      "dedicatedEbsThroughput": "Up to 2085 Mbps",
+      "dedicatedEbsThroughputDescription": "87 Mbps",
+      "ecu": "NA",
+      "enhancedNetworkingSupported": "No",
+      "gpuMemory": "NA",
+      "instanceFamily": "General purpose",
+      "instanceFamilyCategory": "General Purpose",
+      "instanceType": "t3.micro",
+      "intelAvx2Available": "Yes",
+      "intelAvxAvailable": "Yes",
+      "intelTurboAvailable": "Yes",
+      "licenseModel": "No License required",
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "marketoption": "OnDemand",
+      "memory": "1 GiB",
+      "networkPerformance": "Up to 5 Gigabit",
+      "normalizationSizeFactor": "0.5",
+      "operatingSystem": "Linux",
+      "operation": "RunInstances",
+      "physicalProcessor": "Intel Skylake E5 2686 v5",
+      "preInstalledSw": "NA",
+      "processorArchitecture": "64-bit",
+      "processorFeatures": "AVX; AVX2; Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storage": "EBS only",
+      "tenancy": "Shared",
+      "usagetype": "USW2-BoxUsage:t3.micro",
+      "vcpu": "2",
+      "vpcnetworkingsupport": "true"
+     },
+     "productFamily": "Compute Instance",
+     "sku": "VJNS2RY9CFHRVCMH"
+    },
+    "terms": {
+     "OnDemand": {
+      "VJNS2RY9CFHRVCMH.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "VJNS2RY9CFHRVCMH.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.0104 per On Demand Linux t3.micro Instance Hour",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0104000000"
+         },
+         "rateCode": "VJNS2RY9CFHRVCMH.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "VJNS2RY9CFHRVCMH",
+       "termAttributes": {}
+      }
+     }
+    }
+   },
+   {
+    "product": {
+     "attributes": {
+      "availabilityzone": "NA",
+      "capacitystatus": "Used",
+      "classicnetworkingsupport": "false",
+      "clockSpeed": "3.1 GHz",
+      "currentGeneration": "Yes",
+      "dedicatedEbsThroughput": "Up to 2120 Mbps",
+      "dedicatedEbsThroughputDescription": "480 Mbps",
+      "ecu": "10",
+      "enhancedNetworkingSupported": "Yes",
+      "gpuMemory": "NA",
+      "instanceFamily": "General purpose",
+      "instanceFamilyCategory": "General Purpose",
+      "instanceType": "m5.large",
+      "intelAvx2Available": "Yes",
+      "intelAvxAvailable": "Yes",
+      "intelTurboAvailable": "Yes",
+      "licenseModel": "No License required",
+      "location": "US West (Oregon)",
+      "locationType": "AWS Region",
+      "marketoption": "OnDemand",
+      "memory": "8 GiB",
+      "networkPerformance": "Up to 10 Gigabit",
+      "normalizationSizeFactor": "4",
+      "operatingSystem": "Linux",
+      "operation": "RunInstances",
+      "physicalProcessor": "Intel Xeon Platinum 8175",
+      "preInstalledSw": "NA",
+      "processorArchitecture": "64-bit",
+      "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+      "regionCode": "us-west-2",
+      "servicecode": "AmazonEC2",
+      "servicename": "Amazon Elastic Compute Cloud",
+      "storage": "EBS only",
+      "tenancy": "Shared",
+      "usagetype": "USW2-BoxUsage:m5.large",
+      "vcpu": "2",
+      "vpcnetworkingsupport": "true"
+     },
+     "productFamily": "Compute Instance",
+     "sku": "VCN9BB3M49B23Y77"
+    },
+    "terms": {
+     "OnDemand": {
+      "VCN9BB3M49B23Y77.JRTCKXETXF": {
+       "effectiveDate": "2026-11-01T00:00:00Z",
+       "offerTermCode": "JRTCKXETXF",
+       "priceDimensions": {
+        "VCN9BB3M49B23Y77.JRTCKXETXF.6YS6EN2CT7": {
+         "appliesTo": [],
+         "beginRange": "0",
+         "description": "$0.096 per On Demand Linux m5.large Instance Hour",
+         "endRange": "Inf",
+         "pricePerUnit": {
+          "USD": "0.0960000000"
+         },
+         "rateCode": "VCN9BB3M49B23Y77.JRTCKXETXF.6YS6EN2CT7",
+         "unit": "Hrs"
+        }
+       },
+       "sku": "VCN9BB3M49B23Y77",
+       "termAttributes": {}
+      }
+     }
+    }
+   }
+  ]
+ }
+}
