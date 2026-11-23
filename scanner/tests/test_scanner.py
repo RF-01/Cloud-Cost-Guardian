@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -584,20 +585,174 @@ def test_second_scan_keeps_first_seen(aws):
 # ---------------------------------------------------------------- handler
 
 
-def test_handler_scans_first_region_and_returns_summary(aws, monkeypatch):
+def stub_scan(monkeypatch, fail=()):
+    """Replace scan_region: records the regions it is called with; raises for the regions in `fail`."""
     seen = []
-    monkeypatch.setattr(handler, "scan_region", lambda region: seen.append(region) or {"region": region})
-    monkeypatch.setenv("SCAN_REGIONS", "all")
-    summary = handler.handler({"source": "schedule", "job": "scan"}, None)
-    assert seen == ["us-west-2"] and "durationSeconds" in summary
 
-    monkeypatch.setenv("SCAN_REGIONS", "us-east-1, us-west-2")
-    handler.handler({"source": "schedule", "job": "scan"}, None)
-    assert seen[-1] == "us-east-1"
+    def fake(region, now=None):
+        seen.append(region)
+        if region in fail:
+            raise RuntimeError(f"boom in {region}")
+        return {"region": region, "findings": {"EBS_UNATTACHED": 1}, "timelines": {"started": 1},
+                "skippedOutOfScope": 2, "reportOnly": {}}
+
+    monkeypatch.setattr(handler, "scan_region", fake)
+    return seen
+
+
+EVENT = {"source": "schedule", "job": "scan"}
 
 
 def test_scan_regions_parsing(monkeypatch):
-    monkeypatch.setenv("SCAN_REGIONS", "")
-    assert config.scan_regions() == ["us-west-2"]
-    monkeypatch.setenv("SCAN_REGIONS", "eu-west-1,us-east-1")
+    for raw in ("", "all", " ALL "):
+        monkeypatch.setenv("SCAN_REGIONS", raw)
+        assert config.scan_regions() == "all"
+    monkeypatch.delenv("SCAN_REGIONS")
+    assert config.scan_regions() == "all"
+    monkeypatch.setenv("SCAN_REGIONS", "eu-west-1, us-east-1,,eu-west-1")
     assert config.scan_regions() == ["eu-west-1", "us-east-1"]
+
+
+def test_all_uses_describe_regions(aws, monkeypatch):
+    seen = stub_scan(monkeypatch)
+    monkeypatch.setenv("SCAN_REGIONS", "all")
+    expected = sorted(r["RegionName"] for r in aws["ec2"].describe_regions()["Regions"])
+    summary = handler.handler(EVENT, None)
+    assert len(expected) > 1 and sorted(seen) == expected
+    assert summary["regionsScanned"] == expected and summary["regionsFailed"] == {}
+    assert summary["regionDiscovery"] == {"mode": "all"}
+
+
+def test_list_mode_uses_exactly_the_listed_regions(aws, monkeypatch):
+    seen = stub_scan(monkeypatch)
+    monkeypatch.setenv("SCAN_REGIONS", "us-east-1, eu-west-1")
+    called = []
+    monkeypatch.setattr(handler.clients, "client", lambda *a: called.append(a))  # no DescribeRegions
+    summary = handler.handler(EVENT, None)
+    assert sorted(seen) == ["eu-west-1", "us-east-1"] and called == []
+    assert summary["regionsScanned"] == ["us-east-1", "eu-west-1"]
+    assert summary["regionDiscovery"] == {"mode": "list"}
+
+
+def test_describe_regions_failure_falls_back_to_us_west_2(aws, monkeypatch, capsys):
+    seen = stub_scan(monkeypatch)
+    monkeypatch.setenv("SCAN_REGIONS", "all")
+
+    class Broken:
+        def describe_regions(self):
+            raise RuntimeError("AccessDenied")
+
+    monkeypatch.setattr(handler.clients, "client", lambda *a: Broken())
+    summary = handler.handler(EVENT, None)
+    assert seen == ["us-west-2"] and summary["regionsScanned"] == ["us-west-2"]
+    assert summary["regionDiscovery"] == {"mode": "all", "fallback": "us-west-2",
+                                          "error": "RuntimeError: AccessDenied"}
+    assert any(e["action"] == "describe_regions" and "RuntimeError" in e["error"] for e in logs(capsys))
+
+
+def test_findings_in_several_regions_have_their_region_and_prices(aws, monkeypatch):
+    # us-west-2 and us-east-1 have the same gp2 price; sa-east-1 is dearer, so the region's own price shows.
+    regions = ("us-west-2", "us-east-1", "sa-east-1")
+    vols = {}
+    for region in regions:
+        ec2 = boto3.client("ec2", region_name=region)
+        vols[region] = ec2.create_volume(AvailabilityZone=f"{region}a", Size=10, VolumeType="gp2")["VolumeId"]
+    monkeypatch.setenv("SCAN_REGIONS", ",".join(regions))
+    summary = handler.handler(EVENT, None)
+
+    assert summary["regionsScanned"] == list(regions) and summary["regionsFailed"] == {}
+    expected = {"us-west-2": Decimal("1.00"), "us-east-1": Decimal("1.00"), "sa-east-1": Decimal("1.90")}
+    for region, vid in vols.items():
+        item = get(aws, vid, "EBS_UNATTACHED")
+        assert item["region"] == region
+        assert item["estimatedMonthlyCost"] == expected[region]
+        assert get(aws, vid, "MISSING_TAGS")["region"] == region
+        assert summary["regions"][region]["status"] == "ok"
+        assert summary["regions"][region]["findings"] == {"MISSING_TAGS": 1, "EBS_UNATTACHED": 1}
+    assert summary["totals"]["findings"] == {"MISSING_TAGS": 3, "EBS_UNATTACHED": 3}
+    # One scan time for every region.
+    assert len({get(aws, v, "EBS_UNATTACHED")["lastSeenAt"] for v in vols.values()}) == 1
+
+
+def test_one_failing_region_does_not_stop_the_others(aws, monkeypatch, capsys):
+    seen = stub_scan(monkeypatch, fail={"eu-west-1"})
+    monkeypatch.setenv("SCAN_REGIONS", "us-west-2,eu-west-1,us-east-1")
+    summary = handler.handler(EVENT, None)
+
+    assert sorted(seen) == ["eu-west-1", "us-east-1", "us-west-2"]
+    assert summary["regionsScanned"] == ["us-west-2", "us-east-1"]
+    assert summary["regionsFailed"] == {"eu-west-1": "RuntimeError: boom in eu-west-1"}
+    assert summary["regions"]["eu-west-1"]["status"] == "error"
+    assert summary["regions"]["us-west-2"]["status"] == "ok"
+    assert summary["totals"] == {"findings": {"EBS_UNATTACHED": 2}, "timelines": {"started": 2},
+                                 "reportOnly": {}, "skippedOutOfScope": 4}
+    assert summary["slowestRegion"]["region"] in seen and summary["durationSeconds"] >= 0
+    entries = logs(capsys)
+    assert any(e["action"] == "scan_region" and e["region"] == "eu-west-1" and e["errorType"] == "RuntimeError"
+               and e["message"] == "boom in eu-west-1" for e in entries)
+    assert any(e["action"] == "scan" and e["result"] == "done" for e in entries)
+
+
+def test_every_region_failing_raises(aws, monkeypatch, capsys):
+    stub_scan(monkeypatch, fail={"us-west-2", "us-east-1"})
+    monkeypatch.setenv("SCAN_REGIONS", "us-west-2,us-east-1")
+    with pytest.raises(RuntimeError, match="every region"):
+        handler.handler(EVENT, None)
+    summary = [e for e in logs(capsys) if e["action"] == "scan"][-1]
+    assert summary["result"] == "failed" and set(summary["regionsFailed"]) == {"us-west-2", "us-east-1"}
+
+
+@pytest.mark.parametrize("env, regions, expected", [
+    (None, 17, 8), (None, 3, 3), ("2", 17, 2), ("0", 5, 1), ("16", 17, 16)])
+def test_max_workers_respects_scan_max_workers(aws, monkeypatch, env, regions, expected):
+    if env is None:
+        monkeypatch.delenv("SCAN_MAX_WORKERS", raising=False)
+    else:
+        monkeypatch.setenv("SCAN_MAX_WORKERS", env)
+    monkeypatch.setenv("SCAN_REGIONS", ",".join(f"r-{i}" for i in range(regions)))
+    stub_scan(monkeypatch)
+    used = []
+    real = handler.ThreadPoolExecutor
+    monkeypatch.setattr(handler, "ThreadPoolExecutor",
+                        lambda max_workers, **k: used.append(max_workers) or real(max_workers, **k))
+    summary = handler.handler(EVENT, None)
+    assert used == [expected] and summary["maxWorkers"] == expected
+
+
+def _in_threads(fn, count=2):
+    """Call fn twice in each of `count` threads; returns [(first, second), ...] per thread."""
+    out = [None] * count
+
+    def run(i):
+        out[i] = (fn(), fn())
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return out
+
+
+@pytest.mark.parametrize("get_client", [findings.table, timeline._table, timeline._sfn])
+def test_client_caches_are_per_thread(aws, get_client):
+    (a1, a2), (b1, b2) = _in_threads(get_client)
+    assert a1 is a2 and b1 is b2  # cached within a thread
+    assert a1 is not b1  # never shared between threads
+    main = get_client()
+    assert main is get_client() and main is not a1 and main is not b1
+
+
+def test_reset_clients_forgets_every_thread(aws):
+    before = findings.table(), timeline._table()
+    findings.reset_clients()
+    timeline.reset_clients()
+    assert findings.table() is not before[0] and timeline._table() is not before[1]
+
+
+def test_sessions_are_per_thread_but_share_the_model_loader(aws):
+    from scanner import clients
+    (a1, a2), (b1, b2) = _in_threads(clients.session)
+    assert a1 is a2 and b1 is b2 and a1 is not b1
+    loaders = {id(s._session.get_component("data_loader")) for s in (a1, b1, clients.session())}
+    assert loaders == {id(clients._loader)}

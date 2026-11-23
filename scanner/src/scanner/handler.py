@@ -1,20 +1,23 @@
 """Scanner Lambda (lane B, design §8): finds idle EC2, unattached EBS, unused Elastic IPs and missing tags.
 
-Task #20: one region only (the first of SCAN_REGIONS; us-west-2 for "all"). `scan_region` is the unit that
-task #22 loops over / parallelizes. Not yet here: tag copying (#33), CloudTrail lookup (#34),
-resolve / reopen (#35), emails (#36). Cost estimates come from the internal price table (pricing.py, #21).
+Scans every region (design §8.1, task #22): SCAN_REGIONS = "all" → the account's enabled regions from
+DescribeRegions (called in us-west-2; falls back to us-west-2 alone if that call fails), otherwise the listed
+regions. Regions run in parallel threads (SCAN_MAX_WORKERS, default 8); `scan_region` is the per-region unit and
+one failing region never stops the others. Each thread has its own boto3 session (scanner/clients.py), and every
+client is bounded by timeouts and retries so one slow region can't eat the 5-minute timeout (design §17).
+Not yet here: tag copying (#33), CloudTrail lookup (#34), resolve / reopen (#35), emails (#36). Cost estimates
+come from the internal price table (pricing.py, #21).
 """
 
 import json
 import re
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-import boto3
-
 from common import idle, timeline
-from scanner import config, findings, pricing
+from scanner import clients, config, findings, pricing
 
 TIMELINE_TYPES = ("EC2_IDLE", "EBS_UNATTACHED")
 REQUIRED_TAGS = ("owner", "project")
@@ -219,8 +222,8 @@ def scan_region(region, now=None):
     """Run every detection rule in one region. Returns that region's summary."""
     scan = _Scan(region, now or datetime.now(timezone.utc))
     scope = config.dev_scope()
-    ec2 = boto3.client("ec2", region_name=region)
-    cloudwatch = boto3.client("cloudwatch", region_name=region)
+    ec2 = clients.client("ec2", region)  # this thread's session (boto3 sessions are not thread-safe)
+    cloudwatch = clients.client("cloudwatch", region)
 
     instances = _all_instances(ec2)
     _scan_instances(scan, ec2, cloudwatch, instances, scope)
@@ -238,10 +241,93 @@ def scan_region(region, now=None):
     }
 
 
+# ---------------------------------------------------------------- all regions
+
+
+def resolve_regions():
+    """(regions, discovery) for this run. discovery says how the list was obtained, for the summary."""
+    configured = config.scan_regions()
+    if configured != "all":
+        return configured, {"mode": "list"}
+    try:
+        response = clients.client("ec2", config.DEFAULT_REGION).describe_regions()  # enabled regions only
+        regions = sorted(r["RegionName"] for r in response["Regions"])
+        if not regions:
+            raise RuntimeError("DescribeRegions returned no regions")
+        return regions, {"mode": "all"}
+    except Exception as err:
+        error = f"{type(err).__name__}: {err}"
+        print(json.dumps({"resourceId": "*", "findingType": "*", "action": "describe_regions",
+                          "result": "error: falling back to " + config.DEFAULT_REGION, "error": error}))
+        return [config.DEFAULT_REGION], {"mode": "all", "fallback": config.DEFAULT_REGION, "error": error}
+
+
+def _timed_scan(region, now, durations):
+    """Worker thread: scan one region and record how long it took (also when it raises)."""
+    started = time.monotonic()
+    try:
+        return scan_region(region, now=now)
+    finally:
+        durations[region] = time.monotonic() - started  # one key per thread: safe without a lock
+
+
+def _collect(future):
+    """Main thread: (summary, None) or (None, the exception scan_region raised)."""
+    try:
+        return future.result(), None
+    except Exception as err:  # one bad region must never stop the others
+        return None, err
+
+
+def _merge(totals, summary):
+    for key in ("findings", "timelines", "reportOnly"):
+        totals[key].update(summary.get(key) or {})
+    totals["skippedOutOfScope"] += summary.get("skippedOutOfScope") or 0
+
+
 def handler(event, context):
     started = time.monotonic()
-    region = config.scan_regions()[0]  # task #22 scans all of them
-    summary = scan_region(region)
-    summary["durationSeconds"] = round(time.monotonic() - started, 3)
-    print(json.dumps({"action": "scan", "result": "done", **summary}, default=str))
-    return summary
+    now = datetime.now(timezone.utc)  # one scan time for every region (firstSeenAt / lastSeenAt)
+    clients.preload(config.DEFAULT_REGION)  # parse the service models once, before the threads (clients.py)
+    regions, discovery = resolve_regions()
+    workers = min(config.scan_max_workers(), len(regions))
+
+    durations = {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scan") as pool:
+        futures = {region: pool.submit(_timed_scan, region, now, durations) for region in regions}
+        results = {region: _collect(future) for region, future in futures.items()}
+
+    per_region, scanned, failed = {}, [], {}
+    totals = {"findings": Counter(), "timelines": Counter(), "reportOnly": Counter(), "skippedOutOfScope": 0}
+    for region in regions:
+        (summary, err), seconds = results[region], durations.get(region, 0.0)
+        if err is None:
+            scanned.append(region)
+            per_region[region] = dict(summary, status="ok", durationSeconds=round(seconds, 3))
+            _merge(totals, summary)
+        else:
+            error = f"{type(err).__name__}: {err}"
+            failed[region] = error
+            per_region[region] = {"region": region, "status": "error", "error": error,
+                                  "durationSeconds": round(seconds, 3)}
+            print(json.dumps({"resourceId": region, "findingType": "*", "action": "scan_region", "result": "error",
+                              "region": region, "errorType": type(err).__name__, "message": str(err)}))
+
+    # Note for #35 (resolve / reopen): resolve rules must only apply to regions in regionsScanned. A region in
+    # regionsFailed was not seen this run, so its findings must never be resolved because they are "missing".
+    slowest = max(regions, key=lambda r: durations.get(r, 0.0))
+    out = {
+        "regionsScanned": scanned,
+        "regionsFailed": failed,
+        "regionDiscovery": discovery,
+        "maxWorkers": workers,
+        "regions": per_region,
+        "totals": {k: dict(v) if isinstance(v, Counter) else v for k, v in totals.items()},
+        "durationSeconds": round(time.monotonic() - started, 3),
+        "slowestRegion": {"region": slowest, "durationSeconds": round(durations.get(slowest, 0.0), 3)},
+    }
+    print(json.dumps({"resourceId": "*", "findingType": "*", "action": "scan",
+                      "result": "failed" if not scanned else "done", **out}, default=str))
+    if not scanned:
+        raise RuntimeError(f"scan failed in every region: {failed}")
+    return out

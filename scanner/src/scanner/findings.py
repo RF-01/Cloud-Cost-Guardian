@@ -8,10 +8,11 @@ execution fields, timelineStep or counters, and only sets `status` on a new find
 
 import json
 import os
+import threading
 
-import boto3
+from scanner import clients
 
-_clients = {}
+_local = threading.local()  # per-thread Table resource: regions are scanned in parallel threads (task #22)
 
 # Attributes the scanner writes from what it sees. Absent values are REMOVEd so a deleted tag disappears.
 SCANNER_ATTRIBUTES = ("resourceType", "region", "owner", "ownerSource", "project", "name", "classification",
@@ -21,14 +22,19 @@ NEVER_REMOVE = ("estimatedMonthlyCost", "estimatedSnapshotMonthlyCost")
 
 
 def table():
-    if "table" not in _clients:
+    """This thread's findings Table (boto3 resources are not thread-safe)."""
+    local = _local
+    if not hasattr(local, "table"):
         region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
-        _clients["table"] = boto3.resource("dynamodb", region_name=region).Table(os.environ["TABLE_FINDINGS"])
-    return _clients["table"]
+        local.table = clients.resource("dynamodb", region).Table(os.environ["TABLE_FINDINGS"])
+    return local.table
 
 
 def reset_clients():
-    _clients.clear()
+    """Forget the cached Table and sessions in every thread."""
+    global _local
+    _local = threading.local()
+    clients.reset()
 
 
 def log(resource_id, finding_type, action, result, **extra):

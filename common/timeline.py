@@ -18,6 +18,7 @@ POSTPONE_SECONDS, WAIT_BEFORE_FINAL_SECONDS_<EC2|EBS>, WAIT_BEFORE_ACTION_SECOND
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -52,7 +53,7 @@ DEFAULT_WAITS = {"ec2": (172800, 86400), "ebs": (950400, 259200)}
 DEFAULT_POSTPONE_SECONDS = 604800
 MAX_START_ATTEMPTS = 3
 
-_clients = {}
+_local = threading.local()  # per-thread boto3 session and clients (the scanner runs regions in threads)
 
 
 # ---------------------------------------------------------------- clients and helpers
@@ -62,21 +63,34 @@ def _region():
     return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
 
 
+def _thread_clients():
+    """This thread's client cache. boto3 sessions and resources are not thread-safe, so each thread builds its own."""
+    local = _local
+    if not hasattr(local, "clients"):
+        local.session = boto3.session.Session()
+        local.clients = {}
+    return local
+
+
 def _table():
-    if "table" not in _clients:
-        _clients["table"] = boto3.resource("dynamodb", region_name=_region()).Table(os.environ["TABLE_FINDINGS"])
-    return _clients["table"]
+    local = _thread_clients()
+    if "table" not in local.clients:
+        local.clients["table"] = local.session.resource("dynamodb", region_name=_region()).Table(
+            os.environ["TABLE_FINDINGS"])
+    return local.clients["table"]
 
 
 def _sfn():
-    if "sfn" not in _clients:
-        _clients["sfn"] = boto3.client("stepfunctions", region_name=_region())
-    return _clients["sfn"]
+    local = _thread_clients()
+    if "sfn" not in local.clients:
+        local.clients["sfn"] = local.session.client("stepfunctions", region_name=_region())
+    return local.clients["sfn"]
 
 
 def reset_clients():
-    """Forget cached boto3 clients (tests, or after changing env)."""
-    _clients.clear()
+    """Forget cached boto3 clients in every thread (tests, or after changing env)."""
+    global _local
+    _local = threading.local()
 
 
 def _now():
