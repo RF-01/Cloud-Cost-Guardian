@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.11 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.12 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -181,9 +181,13 @@ Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>
 | `<prefix>creator-lookups` | `resourceId` | `region`, `creatorArn`, `email` (or absent), `result` (`found`/`unknown`), `method` (`RunInstances`/`AllocateAddress`/`CreateVolume`/`last-attached`/`Attach`/`Detach`), `lookedUpAt` | scanner → scanner |
 | `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt` | scanner → scanner |
 | `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `createdAt` | daily-summary → dashboard, digest |
-| `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `total`) | `amount` (N, USD), `estimated` (BOOL), `fetchedAt` | daily-cost → dashboard, digest |
+| `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `project#untagged` \| `total`) | `amount` (N, USD **per day**, rounded to **4** decimals: an exception to §2's 2-decimal monthly money, since daily amounts are fractions of a cent), `estimated` (BOOL, Cost Explorer's `Estimated`), `fetchedAt` | daily-cost → dashboard, digest |
 | `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold`, `message`, `day` | budget-subscriber → dashboard, digest |
 | `<prefix>counters` | `counterId` (e.g. `bedrock#2026-11-20`) | `count` (N), `ttl` | dashboard (conditional update) |
+
+bill-history notes: amounts are usage cost **before credits** (Cost Explorer `UnblendedCost`, filter `RECORD_TYPE = Usage`;
+net of credits every amount would be ~$0). Spend without a `project` tag is `project#untagged`. `total` = sum of
+that day's `service#…` rows and is written for every fetched day, even when 0. Rows exist only for amounts > 0.
 
 ### 3.6 How the daily summary counts money
 
@@ -327,6 +331,9 @@ No other code calls `StartExecution` / `StopExecution` directly.
 ### 4.7 Scheduled events (EventBridge Scheduler → Lambda)
 `{ "source": "schedule", "job": "scan" | "daily-cost" | "daily-summary" | "digest" }`. Manual test runs send the same event.
 
+`daily-cost` also takes an optional `"days"` (integer 1–90, default 3): it fetches the last `days` full UTC days up
+to and including yesterday and overwrites their rows (Cost Explorer revises recent days, so every run re-fetches them).
+
 ## 5. Tags
 
 | Tag | Values | Meaning |
@@ -391,11 +398,12 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 | `platform/terraform/core` | `team_email`, `sender_email` | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
 | `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
-| `dashboard/terraform` | `table_names`, `table_arns`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
+| `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_password` (sensitive) | `dashboard_url` |
 
 - `timeline_waits` = object {ec2_before_final, ec2_before_action, ebs_before_final, ebs_before_action} in seconds (defaults §4.4);
   these and `detection_window_minutes`, `eip_stopped_threshold_hours`, `postpone_seconds` are variables of infra/stack.
+- The dashboard module's inputs are added as each dashboard task needs them (#27 adds `dlq_arn`).
 - `origin_secret` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
@@ -443,3 +451,5 @@ budget amounts.
   answer and question limits; new `BEDROCK_MAX_QUESTION_CHARS` (#15).
 - v2.11 — §3.3 who writes each audit event, audit writes never raise; §4.3 remediation takes findingType /
   generation; §4.5 timeline writes timeline_started / timeline_stopped, new `actor` argument (#29 follow-up).
+- v2.12 — §3.5 bill-history amounts per day (4 decimals, usage before credits, project#untagged);
+  §4.7 daily-cost `days`; §8 dashboard takes `dlq_arn` (#27).

@@ -206,3 +206,18 @@ resource "aws_iam_group_policy_attachment" "team_guardrails" {
   group      = aws_iam_group.team.name
   policy_arn = aws_iam_policy.launch_guardrails.arn
 }
+
+# ---------------------------------------------------------------------------
+# Cost allocation tags (task #40): lets Cost Explorer group spend by `project`
+# (the daily-cost Lambda, CONTRACT §3.5) and `owner`. Account-wide, so here and
+# not in a stack. Both keys have been on resources since Nov 21, so they can be
+# activated now (activation only works once a key has appeared in billing).
+# Spend from before activation has no tag data unless a backfill is requested
+# (manual setup step 7).
+# ---------------------------------------------------------------------------
+resource "aws_ce_cost_allocation_tag" "this" {
+  for_each = toset(["project", "owner"])
+
+  tag_key = each.value
+  status  = "Active"
+}

@@ -92,22 +92,20 @@ module "scanner" {
 # --- Lane D: dashboard -------------------------------------------------------
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
 # dashboard_instance_id, dashboard_public_dns.
-#
-# module "dashboard" {
-#   source = "../../dashboard/terraform"
-#
-#   name_prefix = var.name_prefix
-#   owner_email = var.owner_email
-#   dry_run     = var.dry_run
-#
-#   table_names          = module.platform_core.table_names
-#   table_arns           = module.platform_core.table_arns
-#   bedrock_model_id     = var.bedrock_model_id
-#   vpc_id               = module.platform_core.vpc_id
-#   public_subnet_id     = module.platform_core.public_subnet_id
-#   origin_secret        = var.origin_secret
-#   notify_function_name = module.platform_core.notify_function_name
-# }
+# Inputs are added as each dashboard task needs them (CONTRACT §8): bedrock_model_id, vpc_id, public_subnet_id,
+# origin_secret and notify_function_name come with #26, #38 and #42.
+
+module "dashboard" {
+  source = "../../dashboard/terraform"
+
+  name_prefix = var.name_prefix
+  owner_email = var.owner_email
+  dry_run     = var.dry_run
+
+  table_names = module.platform_core.table_names
+  table_arns  = module.platform_core.table_arns
+  dlq_arn     = module.platform_core.dlq_arn
+}
 
 # --- Lane C: platform edge ---------------------------------------------------
 # Outputs (§8): dashboard_url.
