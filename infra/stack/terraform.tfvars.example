@@ -12,8 +12,11 @@ team_email   = "rif07@mail.aub.edu"
 sender_email = "rif07@mail.aub.edu"
 scan_regions = "all"
 
-# Set after task #15.
-bedrock_model_id = ""
+# Bedrock (task #15). Defaults are the decided values; uncomment only to override.
+# bedrock_model_id           = "us.amazon.nova-2-lite-v1:0"
+# bedrock_daily_cap          = 30
+# bedrock_max_tokens         = 500
+# bedrock_max_question_chars = 500
 
 # At least 16 characters each; generate random values, never reuse real passwords.
 origin_secret      = "CHANGE-ME-origin-secret-32-chars"

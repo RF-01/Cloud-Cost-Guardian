@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.9 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.10 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -335,7 +335,10 @@ No other code calls `StartExecution` / `StopExecution` directly.
 | `SENDER_EMAIL`, `TEAM_EMAIL` | notify | |
 | `ACTION_API_URL` | notify | output of platform core (§8) |
 | `RESTORE_LINK_DAYS` | engine (sets restore `expiresAt`) | `30` |
-| `BEDROCK_MODEL_ID`, `BEDROCK_DAILY_CAP`, `BEDROCK_MAX_TOKENS` | digest, dashboard | |
+| `BEDROCK_MODEL_ID` | digest, dashboard | `us.amazon.nova-2-lite-v1:0` (an inference profile ID) |
+| `BEDROCK_DAILY_CAP` | dashboard | `30` |
+| `BEDROCK_MAX_TOKENS` | digest, dashboard | `500` |
+| `BEDROCK_MAX_QUESTION_CHARS` | dashboard | `500` |
 | `MAX_POSTPONES`, `MAX_RESTARTS` | action, timeline | `2`, `2` |
 | `EIP_STOPPED_THRESHOLD_HOURS` | scanner | `24` |
 
@@ -381,8 +384,8 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 ## 9. Open values (to fill in as the team decides — design §24)
 
 Detection thresholds · real detection window · Elastic IP "stopped too long" threshold ·
-budget amounts · Bedrock model, cap and answer length.
-(Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days, allowed instance types = t3.micro, t3.small (launch guardrails, `infra/shared`).)
+budget amounts.
+(Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days, allowed instance types = t3.micro, t3.small (launch guardrails, `infra/shared`), Bedrock: Nova 2 Lite via `us.amazon.nova-2-lite-v1:0`, 30 questions/day, 500 output tokens, 500-char questions.)
 
 ## 10. Change log
 
@@ -416,3 +419,5 @@ budget amounts · Bedrock model, cap and answer length.
   workflow_failed details.
 - v2.8 — §3.1 `estimatedSnapshotMonthlyCost`; what `estimatedMonthlyCost` covers per resource type.
 - v2.9 — §9: allowed instance types decided (t3.micro, t3.small; launch guardrails in `infra/shared`, #25).
+- v2.10 — §6 / §9: Bedrock model decided (Amazon Nova 2 Lite, US geo inference profile), daily cap,
+  answer and question limits; new `BEDROCK_MAX_QUESTION_CHARS` (#15).

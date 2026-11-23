@@ -10,7 +10,7 @@ These are the only console steps. Everything else is in Terraform.
 | 3 | First admin IAM user (`email` tag) and its access key | root | Terraform needs an identity to run as before it can manage IAM | Done |
 | 4 | Open Cost Explorer once to turn it on | admin | No API or Terraform resource enables it | Done |
 | 5 | Click the SES verification email for each address | each person | Proves ownership of the address; Terraform creates the identity, the click is by design manual | Done |
-| 6 | Bedrock model access (if the chosen model asks for it) | admin | One-time agreement in the console | |
+| 6 | Bedrock model access (if the chosen model asks for it) | admin | One-time agreement in the console | Not needed (Nova 2 Lite is an Amazon model; no access step) |
 | 7 | Cost allocation tag backfill (only if tags were activated late) | admin | Console button | Not needed yet |
 | 8 | Confirm the SNS subscription email for the team-alerts topic | rif07 | AWS requires the recipient to click | Done |
 

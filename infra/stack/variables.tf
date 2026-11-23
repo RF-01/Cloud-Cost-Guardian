@@ -60,9 +60,27 @@ variable "scan_regions" {
 }
 
 variable "bedrock_model_id" {
-  description = "Bedrock model for the digest and the Ask box (set after task #15)"
+  description = "Bedrock inference profile ID for the digest and the Ask box (BEDROCK_MODEL_ID; used by the dashboard module, #26/#42/#43)"
   type        = string
-  default     = ""
+  default     = "us.amazon.nova-2-lite-v1:0"
+}
+
+variable "bedrock_daily_cap" {
+  description = "Ask box questions per day for the whole dashboard (BEDROCK_DAILY_CAP; used by the dashboard module, #26/#42/#43)"
+  type        = number
+  default     = 30
+}
+
+variable "bedrock_max_tokens" {
+  description = "Maximum output tokens per Bedrock call (BEDROCK_MAX_TOKENS; used by the dashboard module, #26/#42/#43)"
+  type        = number
+  default     = 500
+}
+
+variable "bedrock_max_question_chars" {
+  description = "Maximum Ask box question length in characters (BEDROCK_MAX_QUESTION_CHARS; used by the dashboard module, #26/#42/#43)"
+  type        = number
+  default     = 500
 }
 
 variable "origin_secret" {

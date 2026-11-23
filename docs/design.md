@@ -781,14 +781,24 @@ Emails to individual owners are sent with **Amazon SES**. SNS is kept only for a
 - **Grounded in our data:** the model is told to answer only from the data it receives and to say when it doesn't know. The real numbers are always shown next to the AI text.
 - **Untrusted input:** tag values (e.g., a resource's `Name`) are written by users and passed to the model as data. The assistant can't take actions, so the impact is limited, but prompts keep data clearly separated from instructions.
 - **Cost limits are required:** the dashboard is behind the team password (§6.4), but a shared password can leak, so every question costs a bounded amount:
-  - a **global daily cap** for the whole dashboard (e.g., 100 questions per day, counted in DynamoDB with a conditional update). A per-visitor cap would be possible (the visitor's IP is available in `CloudFront-Viewer-Address`, §6.4), but a single global counter is simpler and puts a fixed ceiling on the daily cost; the per-visitor web rate limit (§6.3) already stops one visitor from flooding the box;
+  - a **global daily cap** for the whole dashboard (30 questions per day, `CONTRACT.md` §6, counted in DynamoDB with a conditional update). A per-visitor cap would be possible (the visitor's IP is available in `CloudFront-Viewer-Address`, §6.4), but a single global counter is simpler and puts a fixed ceiling on the daily cost; the per-visitor web rate limit (§6.3) already stops one visitor from flooding the box;
   - a **maximum answer length** set on every Bedrock call, and a limit on question length;
   - the account budget (§11.2) as the last safety net, since it covers Bedrock spending too.
 - If Bedrock fails, the digest is sent without the summary.
 
-**Setup:** choose a model available in **us-west-2** and enable access to it in the Bedrock console. Permission: `bedrock:InvokeModel` on that one model only, for the digest Lambda and the dashboard instance role.
+**Setup (decided, #15, Nov 23 2026):** **Amazon Nova 2 Lite**, called from us-west-2 through the US geo inference profile `us.amazon.nova-2-lite-v1:0` (Nova 2 Lite supports only inference-profile calls; the profile routes to us-east-1, us-east-2 and us-west-2). No access step is needed: Amazon models are enabled by default (availability check: `AUTHORIZED`). Anthropic models were set aside: on Bedrock they are AWS Marketplace products (subscription on first call, needs a payment method, plus a use-case form), which is risky on the free plan (§8.7). Reasoning stays off (no reasoning config is ever sent). Limits: 30 questions per day, 500 output tokens per answer, questions at most 500 characters (`CONTRACT.md` §6).
 
-**Cost:** not free; billed per amount of text in and out. A weekly summary plus capped questions keeps it small. Check the chosen model's pricing before setting the cap.
+Permission, for the digest Lambda and the dashboard instance role, nothing else: `bedrock:InvokeModel` on the inference profile `arn:aws:bedrock:us-west-2:<account>:inference-profile/us.amazon.nova-2-lite-v1:0` **and** on the foundation model in each region the profile routes to: `arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0`, `arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0`, `arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0`.
+
+**Cost:** not free; billed per amount of text in and out. Price read on Nov 23 2026 from the AWS Price List API (`AmazonBedrock`, US West (Oregon), standard on-demand, effective 2026-11-01): **$0.33 per 1M input tokens, $2.75 per 1M output tokens** (usage types `USW2-Nova2.0Lite-input-tokens` / `-output-tokens`).
+
+| Use | Tokens (worst case) | Cost |
+|---|---|---|
+| One Ask question | 8,000 in + 500 out | $0.0040 |
+| Ask box at the cap (30/day) | | $0.12/day, $3.61/month (30 days) |
+| Weekly digest summary | 20,000 in + 500 out | $0.008 each, ~$0.035/month (per recipient) |
+
+At 30 questions/day the worst case is $3.61/month per stack (each stack has its own counter, so the dev and demo stacks together could reach about $7.23); in practice questions are far below 8,000 tokens and the cap is rarely reached. A test call ("Reply with the word OK.", 52 in / 4 out tokens, 446 ms) cost about $0.00003.
 
 ---
 
@@ -1067,7 +1077,7 @@ Console-only steps, with the reason for each, are kept in `docs/manual-setup.md`
 - [x] **Create the Terraform state bucket and the account budget alert** (`bootstrap/`).
 - [x] **Verify the sender address and each team member's address in SES** (Terraform creates the identities; each person clicks the verification email).
 - [ ] **Activate `project` and `owner` as cost allocation tags** (Terraform), once at least one resource carries them. If done late, request a backfill (§11.2).
-- [ ] **Enable access to the chosen Bedrock model** in us-west-2, if the model requires it, and check its pricing.
+- [x] **Enable access to the chosen Bedrock model** in us-west-2, if the model requires it, and check its pricing. *(Not needed: Amazon model, enabled by default. Pricing in §12.)*
 
 ### 23.4 Repository and ways of working
 
@@ -1081,14 +1091,13 @@ Console-only steps, with the reason for each, are kept in `docs/manual-setup.md`
 
 Decide before building the part that needs it:
 
-- **Which Bedrock model**, its daily cap and maximum answer length.
 - Whether to add the optional network ACL (§6.4).
 - Exact timings: scan interval, detection window for the real tool, workflow waits, reminder intervals, Elastic IP "stopped too long" threshold. *(Defaults set in `CONTRACT.md`: postpone 7 days, at most 2 postpones, at most 2 automatic restarts, restore links valid 30 days.)*
 - Detection thresholds for CPU, network and disk (tuned during testing). Initial values (common/idle.py, set during testing Nov 22): CPU avg < 5% and max < 20%, network < 2 MB/hour, disk < 3,600 ops/hour (1 op/s).
 - Budget amounts per project and alert thresholds (the account budget is $5).
 - Whether to scan all enabled regions by default or only a configured list, and which regions the price table covers. *(Decided: price table covers all default-enabled regions.)*
 
-*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox); guardrail instance types t3.micro and t3.small (§8.7).*
+*Decided: own VPC with CloudFront and a team password (§6.4); missing-tag findings are emailed once, then shown in the weekly digest (§10.2); all former "under discussion" items (§22); team and sender address `rif07@mail.aub.edu` (verified in SES; AUB DMARC is p=none; test emails reached the inbox); guardrail instance types t3.micro and t3.small (§8.7); Bedrock model Nova 2 Lite, 30 questions/day, 500-token answers (§12).*
 
 ---
 
