@@ -92,8 +92,8 @@ module "scanner" {
 # --- Lane D: dashboard -------------------------------------------------------
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
 # dashboard_instance_id, dashboard_public_dns.
-# Inputs are added as each dashboard task needs them (CONTRACT §8): bedrock_model_id, vpc_id, public_subnet_id,
-# origin_secret and notify_function_name come with #38, #42 and #43.
+# Inputs are added as each dashboard task needs them (CONTRACT §8): bedrock_model_id and notify_function_name
+# come with #42 and #43.
 
 module "dashboard" {
   source = "../../dashboard/terraform"
@@ -105,19 +105,24 @@ module "dashboard" {
   table_names = module.platform_core.table_names
   table_arns  = module.platform_core.table_arns
   dlq_arn     = module.platform_core.dlq_arn
+
+  vpc_id           = module.platform_core.vpc_id
+  public_subnet_id = module.platform_core.public_subnet_id
+  origin_secret    = var.origin_secret
 }
 
 # --- Lane C: platform edge ---------------------------------------------------
 # Outputs (§8): dashboard_url.
-#
-# module "platform_edge" {
-#   source = "../../platform/terraform/edge"
-#
-#   name_prefix = var.name_prefix
-#   owner_email = var.owner_email
-#   dry_run     = var.dry_run
-#
-#   dashboard_public_dns = module.dashboard.dashboard_public_dns
-#   origin_secret        = var.origin_secret
-#   dashboard_password   = var.dashboard_password
-# }
+
+module "platform_edge" {
+  source = "../../platform/terraform/edge"
+
+  name_prefix = var.name_prefix
+  owner_email = var.owner_email
+  dry_run     = var.dry_run
+
+  dashboard_public_dns = module.dashboard.dashboard_public_dns
+  origin_secret        = var.origin_secret
+  dashboard_username   = var.dashboard_username
+  dashboard_password   = var.dashboard_password
+}

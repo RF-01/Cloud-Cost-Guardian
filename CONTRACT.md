@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.14 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.15 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -410,12 +410,12 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 | `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
 | `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
-| `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_password` (sensitive) | `dashboard_url` |
+| `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_username`, `dashboard_password` (all three sensitive) | `dashboard_url` |
 
 - `timeline_waits` = object {ec2_before_final, ec2_before_action, ebs_before_final, ebs_before_action} in seconds (defaults §4.4);
   these and `detection_window_minutes`, `eip_stopped_threshold_hours`, `postpone_seconds` are variables of infra/stack.
 - The dashboard module's inputs are added as each dashboard task needs them (#27 adds `dlq_arn`).
-- `origin_secret` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
+- `origin_secret`, `dashboard_username` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
 - IAM roles for a Lambda live in the module that owns the Lambda; lane C reviews them.
@@ -468,3 +468,4 @@ budget amounts.
   remediated findings; SNAPSHOT_REMINDER not waste; missing dryRun = dry-run (#28).
 - v2.14 — §3.3 / §3.5 `sample` marker and `sample-seed` actor for demo seed rows; §3.6 waste
   excludes SNAPSHOT_REMINDER, matching §3.5 (#26).
+- v2.15 — §8 edge takes `dashboard_username` (each deployment chooses its login; default `guardian`) (#38).

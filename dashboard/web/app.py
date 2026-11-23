@@ -9,10 +9,15 @@ Routes:
     /api/budgets
     /healthz             no AWS calls
 
+Origin check (#38, design §6.4): when ORIGIN_SECRET is set, every request (every route, including /healthz and
+/static) must carry X-Origin-Verify with that value, else 403 {"error": "forbidden"}. CloudFront adds the header;
+anything reaching the instance some other way (e.g. another distribution) is refused. The secret is never logged.
+
 Untrusted text (tag values like `name`, `errorMessage`, audit `details`, budget messages) only reaches HTML
 through Jinja autoescape, and only reaches JS as JSON (API responses or a `tojson` data block), never inline.
 """
 
+import hmac
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,6 +29,7 @@ from . import views
 from .store import Store, day_range, log, table_names_from_env
 
 ALLOWED_METHODS = {"GET", "HEAD"}
+ORIGIN_HEADER = "X-Origin-Verify"
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
@@ -65,8 +71,24 @@ def _int_arg(name, default, lo, hi, choices=None):
     return value
 
 
-def create_app(store=None, now=None, name_prefix=None):
-    """store: a Store (tests pass one built on moto); now: callable returning an aware UTC datetime."""
+def origin_secret_from_env(environ=None):
+    """ORIGIN_SECRET ("" = no origin check). REQUIRE_ORIGIN_SECRET=1 with an empty secret refuses to start."""
+    env = os.environ if environ is None else environ
+    secret = env.get("ORIGIN_SECRET", "")
+    if env.get("REQUIRE_ORIGIN_SECRET") == "1" and not secret:
+        raise RuntimeError("REQUIRE_ORIGIN_SECRET=1 but ORIGIN_SECRET is empty; refusing to start")
+    return secret
+
+
+def _origin_ok(got, secret):
+    # Header values arrive as latin-1-decoded str; surrogateescape keeps any byte comparable without raising.
+    return hmac.compare_digest(got.encode("utf-8", "surrogateescape"), secret.encode("utf-8", "surrogateescape"))
+
+
+def create_app(store=None, now=None, name_prefix=None, origin_secret=None):
+    """store: a Store (tests pass one built on moto); now: callable returning an aware UTC datetime;
+    origin_secret: None = from the environment (origin_secret_from_env), "" = no origin check."""
+    secret = origin_secret_from_env() if origin_secret is None else origin_secret
     app = Flask(__name__)
     app.json_provider_class = JSONProvider
     app.json = JSONProvider(app)
@@ -134,7 +156,34 @@ def create_app(store=None, now=None, name_prefix=None):
         data["generatedAt"] = views.iso(clock())
         return jsonify(data)
 
+    def warm_cache():
+        """Load what the page needs once (WARM_CACHE=1, run in a background thread at startup).
+        Each part is guarded: failures are logged by `guarded`, never raised."""
+        results = {}
+        for name, builder, args in (("findings", findings_data, ({},)), ("summaries", summaries_data, (30,)),
+                                    ("activity", activity_data, (8,)), ("bill", bill_data, (30,)),
+                                    ("budgets", budgets_data, ())):
+            _, error = guarded(builder, *args)
+            results[name] = "error" if error else "ok"
+        log("cache_warm", "ok" if all(v == "ok" for v in results.values()) else "error", parts=results)
+        return results
+
+    app.extensions["guardian_warm_cache"] = warm_cache
+
     # ---------------------------------------------------------------- hooks
+
+    @app.before_request
+    def origin_check():
+        # Registered first, so it runs before the method check and covers /static too.
+        if not secret:
+            return None
+        if _origin_ok(request.headers.get(ORIGIN_HEADER, ""), secret):
+            return None
+        log("origin_rejected", "error", path=request.path[:200],
+            reason="missing" if ORIGIN_HEADER not in request.headers else "mismatch")
+        resp = jsonify({"error": "forbidden"})
+        resp.status_code = 403
+        return resp
 
     @app.before_request
     def only_get():

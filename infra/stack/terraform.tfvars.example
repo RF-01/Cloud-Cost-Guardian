@@ -19,8 +19,11 @@ scan_regions = "all"
 # bedrock_max_question_chars = 500
 
 # At least 16 characters each; generate random values, never reuse real passwords.
+# origin_secret: only A-Z a-z 0-9 . _ ~ + / = - (it is an HTTP header value and a systemd env value).
 origin_secret      = "CHANGE-ME-origin-secret-32-chars"
 dashboard_password = "CHANGE-ME-dashboard-password-32c"
+# Dashboard login user (3-32 letters, digits, . _ -). Default below; uncomment only to choose another.
+# dashboard_username = "guardian"
 
 # Timing (CONTRACT §8). Defaults are the real values; use minutes for personal / demo stacks, e.g. 300.
 timeline_waits = {

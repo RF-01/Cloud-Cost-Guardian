@@ -1,0 +1,102 @@
+#!/bin/bash
+# Cloud Cost Guardian dashboard instance setup (task #38). Rendered by Terraform (dashboard/terraform/web.tf).
+# Contains no secrets: the origin secret is read from SSM by the service's ExecStartPre at every start.
+# origin secret version: ${origin_secret_version}
+set -euo pipefail
+exec > >(tee -a /var/log/guardian-dashboard-setup.log) 2>&1
+echo "guardian-dashboard setup start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+APP=${web_root}
+VENV=$APP/.venv
+
+# Python 3.12 (AL2023 package, same version as the Lambdas). The system python3 (3.9) is left alone.
+dnf install -y python3.12 python3.12-pip
+
+id guardian >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /sbin/nologin guardian
+
+# The code: the zip's key contains its MD5, so new code means new user_data and a new instance.
+work=$(mktemp -d)
+aws s3 cp --region ${region} --only-show-errors "s3://${bucket}/${artifact_key}" "$work/dashboard-web.zip"
+rm -rf "$APP"
+install -d -m 0755 "$APP"
+python3.12 -m zipfile -e "$work/dashboard-web.zip" "$APP"
+rm -rf "$work"
+
+python3.12 -m venv "$VENV"
+"$VENV/bin/python" -m pip install --no-cache-dir --disable-pip-version-check -r "$APP/dashboard/web/requirements.txt"
+chown -R root:root "$APP"
+chmod -R u=rwX,go=rX "$APP" # the service user only reads
+
+# ExecStartPre (runs as root): origin secret from SSM -> /run/guardian-dashboard/origin.env (0600, guardian).
+install -d -m 0755 "$(dirname ${origin_script})"
+cat > ${origin_script} <<'SCRIPT'
+#!/bin/bash
+# Never echo the value and never use `set -x` here.
+set -euo pipefail
+umask 077
+out=/run/guardian-dashboard/origin.env
+value=$(aws ssm get-parameter --region ${region} --name '${origin_param}' --with-decryption --query Parameter.Value --output text)
+if [ -z "$value" ] || [ "$value" = "None" ]; then
+  echo "guardian-dashboard: origin secret ${origin_param} is empty" >&2
+  exit 1
+fi
+case "$value" in
+  *[!A-Za-z0-9._~+/=-]*)
+    echo "guardian-dashboard: origin secret has characters outside A-Za-z0-9._~+/=-" >&2
+    exit 1
+    ;;
+esac
+printf 'ORIGIN_SECRET=%s\n' "$value" > "$out.tmp"
+chown guardian:guardian "$out.tmp"
+chmod 0600 "$out.tmp"
+mv -f "$out.tmp" "$out"
+SCRIPT
+chown root:root ${origin_script}
+chmod 0700 ${origin_script}
+
+cat > /etc/systemd/system/guardian-dashboard.service <<'UNIT'
+[Unit]
+Description=Cloud Cost Guardian dashboard (task #38)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=guardian
+Group=guardian
+WorkingDirectory=${web_root}
+RuntimeDirectory=guardian-dashboard
+RuntimeDirectoryMode=0700
+ExecStartPre=+${origin_script}
+# "-": the file doesn't exist yet when ExecStartPre runs. ExecStart reads it after; if it is still missing,
+# REQUIRE_ORIGIN_SECRET=1 makes the app refuse to start (fail closed).
+EnvironmentFile=-/run/guardian-dashboard/origin.env
+Environment=HOST=0.0.0.0
+Environment=PORT=80
+Environment=THREADS=8
+Environment=AWS_REGION=${region}
+Environment=NAME_PREFIX=${name_prefix}
+%{ for k, v in table_env ~}
+Environment=${k}=${v}
+%{ endfor ~}
+Environment=REQUIRE_ORIGIN_SECRET=1
+Environment=WARM_CACHE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${web_root}/.venv/bin/python -m dashboard.web
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now guardian-dashboard.service
+echo "guardian-dashboard setup done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

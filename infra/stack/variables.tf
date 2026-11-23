@@ -99,6 +99,18 @@ variable "origin_secret" {
   }
 }
 
+variable "dashboard_username" {
+  description = "Team login checked by the CloudFront Function (design §6.4); each deployment chooses its own"
+  type        = string
+  default     = "guardian"
+  sensitive   = true
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]{3,32}$", var.dashboard_username))
+    error_message = "dashboard_username must be 3-32 letters, digits, '.', '_' or '-' (no ':', basic auth splits on it)."
+  }
+}
+
 variable "dashboard_password" {
   description = "Shared team password checked by the CloudFront Function (design §6.4)"
   type        = string

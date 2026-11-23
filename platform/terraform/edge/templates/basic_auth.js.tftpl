@@ -1,0 +1,19 @@
+// CloudFront Function (cloudfront-js-2.0, viewer request): team login for the dashboard (task #38).
+// Rendered by Terraform; the expected value is "Basic " + base64("<username>:<password>").
+var EXPECTED = "${expected}";
+
+function handler(event) {
+    var request = event.request;
+    var auth = request.headers.authorization;
+    if (auth && auth.value === EXPECTED) {
+        return request;
+    }
+    return {
+        statusCode: 401,
+        statusDescription: "Unauthorized",
+        headers: {
+            "www-authenticate": { value: 'Basic realm="Cloud Cost Guardian", charset="UTF-8"' },
+            "cache-control": { value: "no-store" }
+        }
+    };
+}
