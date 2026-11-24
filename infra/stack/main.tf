@@ -79,7 +79,7 @@ module "scanner" {
   table_names          = module.platform_core.table_names
   table_arns           = module.platform_core.table_arns
   ec2_sfn_arn          = module.engine.ec2_sfn_arn
-  ebs_sfn_arn          = module.engine.ebs_sfn_arn # null until engine #30
+  ebs_sfn_arn          = module.engine.ebs_sfn_arn
   notify_function_name = module.platform_core.notify_function_name
   scan_regions         = var.scan_regions
   dev_scope            = local.dev_scope

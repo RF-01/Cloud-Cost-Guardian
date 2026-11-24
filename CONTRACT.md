@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.15 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.16 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -75,10 +75,17 @@ Attributes:
 | `restartCount` | N | `common/timeline.py` | automatic restarts after `failed`, max `MAX_RESTARTS` |
 | `failedStep` | S | engine Catch | |
 | `errorMessage` | S | engine Catch | |
-| `realizedMonthlySavings` | N | engine | set when status becomes `remediated` (design §11.1); counted only per §3.6 |
+| `realizedMonthlySavings` | N | engine | set when status becomes `remediated` (design §11.1); counted only per §3.6. EBS: max(0, `estimatedMonthlyCost` − `estimatedSnapshotMonthlyCost` (0 if absent)), 2 decimals; set in dry-run too. |
 | `snapshotId` | S | engine | EBS: the snapshot created before delete |
+| `sourceVolumeId` | S | engine | `SNAPSHOT_REMINDER` only: the deleted volume |
+| `sizeGb` | N | engine | `SNAPSHOT_REMINDER` only |
 | `dryRun` | BOOL | engine | true if the "action" was only logged |
 | `resolvedAt`, `remediatedAt` | S | whoever sets that status | |
+
+SNAPSHOT_REMINDER findings are written by the EBS workflow after a real (not dry-run) delete, only if absent:
+resourceId = snapshot ID, status open, owner / ownerSource / project / name copied from the EBS finding,
+estimatedMonthlyCost = its estimatedSnapshotMonthlyCost, firstSeenAt = the delete time. Never created in dry-run.
+The scanner resolves it once the snapshot is gone (#35).
 
 ### 3.2 Finding status lifecycle
 
@@ -287,7 +294,7 @@ the workflows pass both on every call.
 |---|---|---|
 | `CHECK_EC2` | — | `{ "stillIdle": bool, "protected": bool, "state": "running" }` |
 | `STOP_INSTANCE` | — | `{ "stopped": bool, "dryRun": bool, "elasticIps": ["..."] }` |
-| `CHECK_EBS` | — | `{ "stillUnattached": bool, "protected": bool, "exists": bool }` |
+| `CHECK_EBS` | — | `{ "stillUnattached": bool, "protected": bool, "exists": bool, "sizeGb": 8, "availabilityZone": "us-west-2a" }` (sizeGb / availabilityZone only when exists) |
 | `CREATE_SNAPSHOT` | — | `{ "snapshotId": "snap-...", "dryRun": bool }` |
 | `SNAPSHOT_STATUS` | `snapshotId` | `{ "state": "pending" \| "completed" \| "error" }` |
 | `DELETE_VOLUME` | `snapshotId` | `{ "deleted": bool, "dryRun": bool }` |
@@ -372,7 +379,7 @@ to and including yesterday and overwrites their rows (Cost Explorer revises rece
 | `NOTIFY_FUNCTION_NAME` | scanner, digest, action, engine | `cg-dev-notify` |
 | `SENDER_EMAIL`, `TEAM_EMAIL` | notify | |
 | `ACTION_API_URL` | notify | output of platform core (§8) |
-| `RESTORE_LINK_DAYS` | engine (sets restore `expiresAt`) | `30` |
+| `RESTORE_LINK_DAYS` | engine (EBS workflow definition; a Terraform local) | `30` |
 | `BEDROCK_MODEL_ID` | digest, dashboard | `us.amazon.nova-2-lite-v1:0` (an inference profile ID) |
 | `BEDROCK_DAILY_CAP` | dashboard | `30` |
 | `BEDROCK_MAX_TOKENS` | digest, dashboard | `500` |
@@ -469,3 +476,5 @@ budget amounts.
 - v2.14 — §3.3 / §3.5 `sample` marker and `sample-seed` actor for demo seed rows; §3.6 waste
   excludes SNAPSHOT_REMINDER, matching §3.5 (#26).
 - v2.15 — §8 edge takes `dashboard_username` (each deployment chooses its login; default `guardian`) (#38).
+- v2.16 — §3.1 SNAPSHOT_REMINDER attributes (sourceVolumeId, sizeGb) and who writes them; EBS realized savings
+  rule; §4.3 CHECK_EBS returns sizeGb / availabilityZone; §6 RESTORE_LINK_DAYS is a workflow constant (#30).

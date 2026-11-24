@@ -1,5 +1,6 @@
 # EC2 timeline state machine (design §9.2, CONTRACT §4.4). Started only by common/timeline.py.
-# The definition is ec2_timeline.asl.json (JSONata); the shared pieces below are injected as JSON.
+# The definition is ec2_timeline.asl.json (JSONata); the shared pieces below are injected as JSON and are also
+# used by the EBS timeline (ebs_timeline.tf).
 
 locals {
   # Lambda service errors, retried with backoff (AWS's recommended set for lambda:invoke).
@@ -26,7 +27,8 @@ locals {
     generation  = "{% $input.generation %}"
   }
 
-  ec2_timeline_parts = {
+  # Template parts used by both timelines (ec2_timeline.asl.json, ebs_timeline.asl.json).
+  timeline_parts = {
     findings_table  = var.table_names["findings"]
     notify_arn      = var.notify_function_arn
     remediation_arn = aws_lambda_function.remediation.arn
@@ -35,9 +37,6 @@ locals {
       resourceId  = { S = "{% $input.resourceId %}" }
       findingType = { S = "{% $input.findingType %}" }
     })
-
-    check_payload = jsonencode(merge({ action = "CHECK_EC2" }, local.remediation_args))
-    stop_payload  = jsonencode(merge({ action = "STOP_INSTANCE" }, local.remediation_args))
 
     # Notify: service errors only. A Notify failure (after retries) fails the execution, so the
     # instance is never stopped without its final warning (design §9.5).
@@ -62,8 +61,12 @@ locals {
       BackoffRate     = 2
       JitterStrategy  = "FULL"
     }])
-
   }
+
+  ec2_timeline_parts = merge(local.timeline_parts, {
+    check_payload = jsonencode(merge({ action = "CHECK_EC2" }, local.remediation_args))
+    stop_payload  = jsonencode(merge({ action = "STOP_INSTANCE" }, local.remediation_args))
+  })
 
   # ---- Failure branch (design §9.1 "Catch step"), shared with the EBS timeline (#30). -----------------------
   # Every timeline catcher Assigns failedStep, progress, error and errorMessage, so each state of the branch

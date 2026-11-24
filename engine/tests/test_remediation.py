@@ -282,7 +282,8 @@ def test_dev_scope_checks_the_snapshot(aws, monkeypatch):
 
 def test_check_ebs(aws):
     vid = volume(aws)
-    assert call("CHECK_EBS", vid) == {"stillUnattached": True, "protected": False, "exists": True}
+    assert call("CHECK_EBS", vid) == {"stillUnattached": True, "protected": False, "exists": True,
+                                      "sizeGb": 8, "availabilityZone": f"{REGION}a"}
     iid = launch(aws)
     aws["ec2"].attach_volume(VolumeId=vid, InstanceId=iid, Device="/dev/sdf")
     assert call("CHECK_EBS", vid)["stillUnattached"] is False

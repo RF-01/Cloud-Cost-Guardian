@@ -5,7 +5,8 @@ Input: {"action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": tr
 
     CHECK_EC2        -> {"stillIdle": bool, "protected": bool, "state": "running"}
     STOP_INSTANCE    -> {"stopped": bool, "dryRun": bool, "elasticIps": [...]}  (already stopped: false, false)
-    CHECK_EBS        -> {"stillUnattached": bool, "protected": bool, "exists": bool}
+    CHECK_EBS        -> {"stillUnattached": bool, "protected": bool, "exists": bool,
+                         "sizeGb": 8, "availabilityZone": "us-west-2a"}   (sizeGb / AZ only when exists)
     CREATE_SNAPSHOT  -> {"snapshotId": "snap-..." | null in dry-run, "dryRun": bool}
     SNAPSHOT_STATUS  -> {"state": "pending" | "completed" | "error"}      (input: snapshotId)
     DELETE_VOLUME    -> {"deleted": bool, "dryRun": bool}                (input: snapshotId)
@@ -209,7 +210,8 @@ def check_ebs(event, ec2):
     protected = _protected(tags)
     _log(rid, "CHECK_EBS", "unattached" if unattached else "attached", findingType="EBS_UNATTACHED",
          state=vol["State"], protected=protected)
-    return {"stillUnattached": unattached, "protected": protected, "exists": True}
+    return {"stillUnattached": unattached, "protected": protected, "exists": True, "sizeGb": vol["Size"],
+            "availabilityZone": vol["AvailabilityZone"]}
 
 
 def create_snapshot(event, ec2):

@@ -1,0 +1,766 @@
+{
+  "Comment": "EBS unattached timeline (design 9.3). Input: CONTRACT 4.4. Every findings update is conditional on generation = input generation AND status = in_progress; a failed condition (postpone, restart, protect, scanner resolve) ends the execution quietly. Any other error (after retries) goes to the failure branch (design 9.1, CONTRACT 3.2): MarkFailed -> WriteFailureAudit -> NotifyFailure -> Failed; after MarkRemediated the order is DeleteConfirmation -> IsRealDelete -> CreateSnapshotReminder (real delete only) -> Done, and an error there (the finding is already remediated) goes to ConfirmationFailed -> Failed. Each catcher Assigns failedStep, progress, error, errorMessage.",
+  "QueryLanguage": "JSONata",
+  "TimeoutSeconds": 2592000,
+  "StartAt": "SetDeadline",
+  "States": {
+    "SetDeadline": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": {
+          "resourceId": { "S": "{% $states.input.resourceId %}" },
+          "findingType": { "S": "{% $states.input.findingType %}" }
+        },
+        "UpdateExpression": "SET deadlineAt = :deadline, timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":deadline": { "S": "{% $fromMillis($toMillis($now()) + ($states.input.waits.beforeFinalSeconds + $states.input.waits.beforeActionSeconds) * 1000, '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') %}" },
+          ":step": { "S": "first_notice" },
+          ":gen": { "N": "{% $string($states.input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        },
+        "ReturnValues": "UPDATED_NEW"
+      },
+      "Assign": {
+        "input": "{% $states.input %}",
+        "deadlineAt": "{% $states.result.Attributes.deadlineAt.S %}",
+        "cost": "{% $type($states.input.estimatedMonthlyCost) = 'number' ? $round($states.input.estimatedMonthlyCost, 2) : null %}"
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "SetDeadline",
+            "progress": "No action was taken on the volume; the first notice may not have been sent.",
+            "input": "{% $states.input %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "FirstNotice"
+    },
+    "FirstNotice": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "FIRST_NOTICE",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": ["protect", "postpone"],
+              "expiresAt": "{% $deadlineAt %}"
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "resourceType": "{% $input.resourceType %}",
+            "region": "{% $input.region %}",
+            "estimatedMonthlyCost": "{% $cost %}",
+            "deadlineAt": "{% $deadlineAt %}",
+            "plannedAction": "snapshot_and_delete",
+            "dryRun": "{% $input.dryRun %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "FirstNotice",
+            "progress": "No action was taken on the volume; the first notice may not have been sent.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "StepWaiting"
+    },
+    "StepWaiting": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "waiting" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepWaiting",
+            "progress": "The first notice was sent; the volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "WaitBeforeFinal"
+    },
+    "WaitBeforeFinal": {
+      "Type": "Wait",
+      "Seconds": "{% $input.waits.beforeFinalSeconds %}",
+      "Next": "RecheckBeforeFinal"
+    },
+    "RecheckBeforeFinal": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${check_payload}
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "RecheckBeforeFinal",
+            "progress": "The first notice was sent; the volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "StillUnattachedBeforeFinal"
+    },
+    "StillUnattachedBeforeFinal": {
+      "Type": "Choice",
+      "Comment": "exists = false (the volume is gone) falls to MarkResolved.",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.protected = true %}",
+          "Next": "MarkProtected"
+        },
+        {
+          "Condition": "{% $states.input.stillUnattached = true and $states.input.protected = false %}",
+          "Next": "StepFinalWarning"
+        }
+      ],
+      "Default": "MarkResolved"
+    },
+    "StepFinalWarning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "final_warning" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepFinalWarning",
+            "progress": "The first notice was sent; the volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "FinalWarning"
+    },
+    "FinalWarning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "FINAL_WARNING",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": ["protect", "postpone"],
+              "expiresAt": "{% $deadlineAt %}"
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "resourceType": "{% $input.resourceType %}",
+            "region": "{% $input.region %}",
+            "estimatedMonthlyCost": "{% $cost %}",
+            "deadlineAt": "{% $deadlineAt %}",
+            "plannedAction": "snapshot_and_delete",
+            "dryRun": "{% $input.dryRun %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "FinalWarning",
+            "progress": "The first notice was sent; the final warning may not have been sent. The volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "WaitBeforeAction"
+    },
+    "WaitBeforeAction": {
+      "Type": "Wait",
+      "Seconds": "{% $input.waits.beforeActionSeconds %}",
+      "Next": "RecheckBeforeAction"
+    },
+    "RecheckBeforeAction": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${check_payload}
+      },
+      "Assign": {
+        "check": "{% $states.result.Payload %}"
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "RecheckBeforeAction",
+            "progress": "The first notice and the final warning were sent; the volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "StillUnattachedBeforeAction"
+    },
+    "StillUnattachedBeforeAction": {
+      "Type": "Choice",
+      "Comment": "exists = false (the volume is gone) falls to MarkResolved.",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.protected = true %}",
+          "Next": "MarkProtected"
+        },
+        {
+          "Condition": "{% $states.input.stillUnattached = true and $states.input.protected = false %}",
+          "Next": "StepActing"
+        }
+      ],
+      "Default": "MarkResolved"
+    },
+    "StepActing": {
+      "Type": "Task",
+      "Comment": "ALL_NEW: owner / project / name and the snapshot price, for the realized savings and the SNAPSHOT_REMINDER finding.",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET timelineStep = :step",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":step": { "S": "acting" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        },
+        "ReturnValues": "ALL_NEW"
+      },
+      "Assign": {
+        "finding": "{% $merge([$exists($states.result.Attributes.owner.S) ? {'owner': $states.result.Attributes.owner.S} : {}, $exists($states.result.Attributes.ownerSource.S) ? {'ownerSource': $states.result.Attributes.ownerSource.S} : {}, $exists($states.result.Attributes.project.S) ? {'project': $states.result.Attributes.project.S} : {}, $exists($states.result.Attributes.name.S) ? {'name': $states.result.Attributes.name.S} : {}, $exists($states.result.Attributes.estimatedSnapshotMonthlyCost.N) ? {'estimatedSnapshotMonthlyCost': $number($states.result.Attributes.estimatedSnapshotMonthlyCost.N)} : {}]) %}",
+        "savings": "{% $cost = null ? null : $round($max([0, $cost - ($exists($states.result.Attributes.estimatedSnapshotMonthlyCost.N) ? $number($states.result.Attributes.estimatedSnapshotMonthlyCost.N) : 0)]), 2) %}",
+        "polls": 0
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "StepActing",
+            "progress": "The first notice and the final warning were sent; the volume was not changed.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "CreateSnapshot"
+    },
+    "CreateSnapshot": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${create_snapshot_payload}
+      },
+      "Assign": {
+        "snap": "{% $states.result.Payload %}"
+      },
+      "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "CreateSnapshot",
+            "progress": "{% $input.dryRun = true ? 'Dry run: nothing was changed.' : 'The snapshot request failed or its result is unknown (check the snapshots of the volume in the console); the volume was not changed.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "HasSnapshot"
+    },
+    "HasSnapshot": {
+      "Type": "Choice",
+      "Comment": "No snapshot ID = dry run: nothing to record or wait for.",
+      "Choices": [
+        {
+          "Condition": "{% $snap.snapshotId = null %}",
+          "Next": "DeleteVolume"
+        }
+      ],
+      "Default": "RecordSnapshot"
+    },
+    "RecordSnapshot": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET snapshotId = :snap",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":snap": { "S": "{% $snap.snapshotId %}" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "RecordSnapshot",
+            "progress": "{% 'Snapshot ' & $snap.snapshotId & ' was created; the volume was not deleted.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "WaitForSnapshot"
+    },
+    "WaitForSnapshot": {
+      "Type": "Wait",
+      "Seconds": ${snapshot_poll_seconds},
+      "Next": "SnapshotStatus"
+    },
+    "SnapshotStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${snapshot_status_payload}
+      },
+      "Assign": {
+        "polls": "{% $polls + 1 %}"
+      },
+      "Output": "{% $states.result.Payload %}",
+      "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "SnapshotStatus",
+            "progress": "{% 'Snapshot ' & $snap.snapshotId & ' was created; the volume was not deleted.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "SnapshotReady"
+    },
+    "SnapshotReady": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.state = 'completed' %}",
+          "Next": "DeleteVolume"
+        },
+        {
+          "Condition": "{% $states.input.state = 'pending' and $polls < ${snapshot_max_polls} %}",
+          "Next": "WaitForSnapshot"
+        },
+        {
+          "Condition": "{% $states.input.state = 'error' %}",
+          "Next": "SnapshotFailed"
+        }
+      ],
+      "Default": "SnapshotTimedOut"
+    },
+    "SnapshotFailed": {
+      "Type": "Pass",
+      "Assign": {
+        "failedStep": "SnapshotFailed",
+        "progress": "{% 'Snapshot ' & $snap.snapshotId & ' was created but is in state error; the volume was not deleted.' %}",
+        "error": "{% {'Error': 'SnapshotFailed', 'Cause': 'snapshot ' & $snap.snapshotId & ' is in state error'} %}",
+        "errorMessage": "{% 'SnapshotFailed: snapshot ' & $snap.snapshotId & ' is in state error' %}"
+      },
+      "Next": "MarkFailed"
+    },
+    "SnapshotTimedOut": {
+      "Type": "Pass",
+      "Assign": {
+        "failedStep": "SnapshotTimedOut",
+        "progress": "{% 'Snapshot ' & $snap.snapshotId & ' was created but is still pending after about ' & $string($round(${snapshot_poll_seconds} * ${snapshot_max_polls} / 3600, 1)) & ' hours; the volume was not deleted.' %}",
+        "error": "{% {'Error': 'SnapshotTimedOut', 'Cause': 'snapshot ' & $snap.snapshotId & ' is ' & $states.input.state & ' after ' & $string($polls) & ' checks'} %}",
+        "errorMessage": "{% 'SnapshotTimedOut: snapshot ' & $snap.snapshotId & ' is ' & $states.input.state & ' after ' & $string($polls) & ' checks' %}"
+      },
+      "Next": "MarkFailed"
+    },
+    "DeleteVolume": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${remediation_arn}",
+        "Payload": ${delete_payload}
+      },
+      "Assign": {
+        "del": "{% $states.result.Payload %}"
+      },
+      "Retry": ${remediation_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "DeleteVolume",
+            "progress": "{% $snap.dryRun = true ? 'Dry run: nothing was changed.' : 'Snapshot ' & $snap.snapshotId & ' was created; the delete request failed or its result is unknown; check the volume in the console.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "MarkRemediated"
+    },
+    "MarkRemediated": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "{% 'SET #st = :remediated, remediatedAt = :now, dryRun = :dryRun, timelineStep = :done' & ($del.dryRun = false ? ', snapshotId = :snap' : '') & ($savings != null ? ', realizedMonthlySavings = :savings' : '') %}",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": "{% $merge([{':remediated': {'S': 'remediated'}, ':now': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, ':dryRun': {'BOOL': $del.dryRun}, ':done': {'S': 'done'}, ':gen': {'N': $string($input.generation)}, ':inProgress': {'S': 'in_progress'}}, $del.dryRun = false ? {':snap': {'S': $snap.snapshotId}} : {}, $savings != null ? {':savings': {'N': $string($savings)}} : {}]) %}"
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkRemediated",
+            "progress": "{% $del.dryRun = true ? 'Dry run: nothing was changed; the finding could not be marked remediated.' : 'Snapshot ' & $snap.snapshotId & ' was created and the volume was deleted; the finding could not be marked remediated.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "DeleteConfirmation"
+    },
+    "IsRealDelete": {
+      "Type": "Choice",
+      "Comment": "Only a real delete leaves a snapshot to remind the owner about.",
+      "Choices": [
+        {
+          "Condition": "{% $del.dryRun = false %}",
+          "Next": "CreateSnapshotReminder"
+        }
+      ],
+      "Default": "Done"
+    },
+    "CreateSnapshotReminder": {
+      "Type": "Task",
+      "Comment": "SNAPSHOT_REMINDER finding for the digest (CONTRACT 3.1), only if absent (already there: Done). Runs after the confirmation email; the finding is already remediated, so errors go to ConfirmationFailed.",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Item": "{% $merge([{'resourceId': {'S': $snap.snapshotId}, 'findingType': {'S': 'SNAPSHOT_REMINDER'}, 'resourceType': {'S': 'snapshot'}, 'region': {'S': $input.region}, 'status': {'S': 'open'}, 'sourceVolumeId': {'S': $input.resourceId}, 'sizeGb': {'N': $string($check.sizeGb)}, 'firstSeenAt': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, 'lastSeenAt': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, 'generation': {'N': '0'}}, $exists($finding.owner) ? {'owner': {'S': $finding.owner}} : {}, $exists($finding.ownerSource) ? {'ownerSource': {'S': $finding.ownerSource}} : {}, $exists($finding.project) ? {'project': {'S': $finding.project}} : {}, $exists($finding.name) ? {'name': {'S': $finding.name}} : {}, $exists($finding.estimatedSnapshotMonthlyCost) ? {'estimatedMonthlyCost': {'N': $string($finding.estimatedSnapshotMonthlyCost)}} : {}]) %}",
+        "ConditionExpression": "attribute_not_exists(resourceId)"
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Done" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "CreateSnapshotReminder",
+            "progress": "{% 'Snapshot ' & $snap.snapshotId & ' was created, the volume was deleted, the finding marked remediated and the confirmation email sent; the snapshot reminder could not be recorded.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "ConfirmationFailed"
+        }
+      ],
+      "Next": "Done"
+    },
+    "DeleteConfirmation": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "DELETE_CONFIRMATION",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": "{% $del.dryRun = false ? ['restore'] : [] %}",
+              "expiresAt": "{% $del.dryRun = false ? $fromMillis($millis() + ${restore_link_days} * 86400000, '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') : null %}"
+            }
+          ],
+          "vars": "{% $merge([{'resourceId': $input.resourceId, 'region': $input.region, 'sizeGb': $check.sizeGb, 'snapshotId': $snap.snapshotId, 'realizedMonthlySavings': $savings, 'dryRun': $del.dryRun, 'availabilityZone': $check.availabilityZone}, $exists($finding.name) ? {'name': $finding.name} : {}]) %}"
+        }
+      },
+      "Retry": ${notify_retry},
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "DeleteConfirmation",
+            "progress": "{% $del.dryRun = true ? 'Dry run: nothing was changed and the finding was marked remediated; only the confirmation email failed.' : 'Snapshot ' & $snap.snapshotId & ' was created, the volume was deleted and the finding marked remediated; only the confirmation email failed.' %}",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "ConfirmationFailed"
+        }
+      ],
+      "Next": "IsRealDelete"
+    },
+    "Done": {
+      "Type": "Succeed"
+    },
+    "MarkResolved": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :resolved, resolvedAt = :now, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":resolved": { "S": "resolved" },
+          ":now": { "S": "{% $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z') %}" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkResolved",
+            "progress": "Nothing was changed by the Guardian (the volume was attached again or no longer exists); the finding could not be marked resolved.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "Resolved"
+    },
+    "Resolved": {
+      "Type": "Succeed"
+    },
+    "MarkProtected": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :open, reportOnlyReason = :protected, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":open": { "S": "open" },
+          ":protected": { "S": "protected" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Assign": {
+            "failedStep": "MarkProtected",
+            "progress": "The volume is tagged guardian:protect=true and was not changed; the finding could not be marked report-only.",
+            "error": "{% $states.errorOutput %}",
+            "errorMessage": ${error_message}
+          },
+          "Next": "MarkFailed"
+        }
+      ],
+      "Next": "Protected"
+    },
+    "Protected": {
+      "Type": "Succeed",
+      "Comment": "The protect tag was found at a re-check: report-only from now on (CONTRACT 3.2)."
+    },
+    "Superseded": {
+      "Type": "Succeed",
+      "Comment": "The finding moved on (new generation, protected, resolved by the scanner): this execution must not write anything."
+    },
+    "MarkFailed": {
+      "Type": "Task",
+      "Comment": "Failure branch step 1. Only while this generation is still in_progress; if the finding moved on, end quietly (no email).",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Arguments": {
+        "TableName": "${findings_table}",
+        "Key": ${finding_key},
+        "UpdateExpression": "SET #st = :failed, failedStep = :failedStep, errorMessage = :errorMessage, timelineStep = :done",
+        "ConditionExpression": "generation = :gen AND #st = :inProgress",
+        "ExpressionAttributeNames": { "#st": "status" },
+        "ExpressionAttributeValues": {
+          ":failed": { "S": "failed" },
+          ":failedStep": { "S": "{% $failedStep %}" },
+          ":errorMessage": { "S": "{% $errorMessage %}" },
+          ":done": { "S": "done" },
+          ":gen": { "N": "{% $string($input.generation) %}" },
+          ":inProgress": { "S": "in_progress" }
+        }
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "Next": "Superseded" },
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "WriteFailureAudit"
+    },
+    "WriteFailureAudit": {
+      "Type": "Task",
+      "Comment": "Failure branch step 2: workflow_failed audit entry (CONTRACT 3.3). An error here must not stop the owner email.",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "${audit_table}",
+        "Item": ${failure_audit_item}
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "NotifyFailure" }
+      ],
+      "Next": "NotifyFailure"
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Comment": "Failure branch step 3: tell the owner nothing further will happen to the resource.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "TimeoutSeconds": 90,
+      "Arguments": {
+        "FunctionName": "${notify_arn}",
+        "Payload": {
+          "template": "WORKFLOW_FAILED",
+          "to": "{% $input.owner %}",
+          "findings": [
+            {
+              "resourceId": "{% $input.resourceId %}",
+              "findingType": "{% $input.findingType %}",
+              "generation": "{% $input.generation %}",
+              "actions": []
+            }
+          ],
+          "vars": {
+            "resourceId": "{% $input.resourceId %}",
+            "region": "{% $input.region %}",
+            "findingType": "{% $input.findingType %}",
+            "failedStep": "{% $failedStep %}",
+            "errorMessage": "{% $errorMessage %}",
+            "progress": "{% $progress %}"
+          }
+        }
+      },
+      "Retry": ${notify_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "Failed"
+    },
+    "ConfirmationFailed": {
+      "Type": "Task",
+      "Comment": "Failed after the finding became remediated (DeleteConfirmation or snapshot reminder): audit only. No status change, no owner email.",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Arguments": {
+        "TableName": "${audit_table}",
+        "Item": ${failure_audit_item}
+      },
+      "Retry": ${ddb_retry},
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Failed" }
+      ],
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Comment": "Failure branch step 5: counts in ExecutionsFailed (workflow alarms, #32).",
+      "Error": "WorkflowFailed",
+      "Cause": "{% $failedStep & ': ' & $errorMessage %}"
+    }
+  }
+}

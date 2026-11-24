@@ -6,8 +6,8 @@ output "ec2_sfn_arn" {
 }
 
 output "ebs_sfn_arn" {
-  description = "EBS timeline state machine. null until task #30"
-  value       = null # EBS workflow: task #30
+  description = "EBS timeline state machine (EBS_SFN_ARN for common/timeline.py)"
+  value       = aws_sfn_state_machine.ebs_timeline.arn
 }
 
 output "remediation_function_arn" {
