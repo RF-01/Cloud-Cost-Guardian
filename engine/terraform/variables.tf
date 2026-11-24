@@ -11,7 +11,7 @@ variable "owner_email" {
 }
 
 variable "dry_run" {
-  description = "DRY_RUN for the remediation Lambda (it also honours the workflow input's dryRun: either one makes it a dry run)"
+  description = "DRY_RUN for the remediation Lambda (it also honours the workflow input's dryRun: either one makes it a dry run) and the action Lambda (dryRun of postponed timelines)"
   type        = bool
 }
 
@@ -31,7 +31,7 @@ variable "notify_function_arn" {
 }
 
 variable "notify_function_name" {
-  description = "Notify Lambda name (NOTIFY_FUNCTION_NAME for the action Lambda, task #31). Unused until then"
+  description = "Notify Lambda name (NOTIFY_FUNCTION_NAME for the action Lambda: RESTORE_DONE email)"
   type        = string
 }
 
@@ -41,12 +41,12 @@ variable "team_topic_arn" {
 }
 
 variable "action_api_id" {
-  description = "Platform core HTTP API id (engine adds the /action routes, task #31). Unused until then"
+  description = "Platform core HTTP API id (engine adds the /action routes and integration)"
   type        = string
 }
 
 variable "action_api_execution_arn" {
-  description = "Platform core HTTP API execution ARN (Lambda permission, task #31). Unused until then"
+  description = "Platform core HTTP API execution ARN (source of the action Lambda permission)"
   type        = string
 }
 
@@ -56,7 +56,7 @@ variable "dev_scope" {
 }
 
 variable "timeline_waits" {
-  description = "Workflow waits in seconds (CONTRACT §4.4, §8). The workflows read waits from their input; the action Lambda (#31) uses these. Unused until then"
+  description = "Workflow waits in seconds (CONTRACT §4.4, §8). The workflows read waits from their input; the action Lambda passes these into postponed timelines"
   type = object({
     ec2_before_final  = number
     ec2_before_action = number
@@ -66,7 +66,7 @@ variable "timeline_waits" {
 }
 
 variable "postpone_seconds" {
-  description = "POSTPONE_SECONDS for the action Lambda (task #31). Unused until then"
+  description = "POSTPONE_SECONDS for the action Lambda (beforeFinalSeconds of a postponed timeline)"
   type        = number
 }
 

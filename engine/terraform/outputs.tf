@@ -15,6 +15,6 @@ output "remediation_function_arn" {
 }
 
 output "action_function_arn" {
-  description = "Action Lambda. null until task #31"
-  value       = null # action Lambda + /action routes: task #31
+  description = "Action Lambda (email action links, behind core's HTTP API /action routes)"
+  value       = aws_lambda_function.action.arn
 }

@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.16 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.17 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -77,6 +77,7 @@ Attributes:
 | `errorMessage` | S | engine Catch | |
 | `realizedMonthlySavings` | N | engine | set when status becomes `remediated` (design §11.1); counted only per §3.6. EBS: max(0, `estimatedMonthlyCost` − `estimatedSnapshotMonthlyCost` (0 if absent)), 2 decimals; set in dry-run too. |
 | `snapshotId` | S | engine | EBS: the snapshot created before delete |
+| `availabilityZone` | S | engine | EBS_UNATTACHED: the volume's zone, set when it becomes remediated (used by restore) |
 | `sourceVolumeId` | S | engine | `SNAPSHOT_REMINDER` only: the deleted volume |
 | `sizeGb` | N | engine | `SNAPSHOT_REMINDER` only |
 | `dryRun` | BOOL | engine | true if the "action" was only logged |
@@ -341,10 +342,10 @@ No other code calls `StartExecution` / `StopExecution` directly.
 
 ### 4.6 Action API (API Gateway → Action Lambda)
 - The HTTP API and its stage are created by **platform core** (§8); engine adds the route and the Lambda integration.
-- `GET /action?t=<token>` → HTML confirmation page. Changes nothing.
-- `POST /action` (form field `t`) → performs the action once, returns an HTML result page.
-- Refusals (HTML page, HTTP 4xx, `link_refused` audit): unknown token, used, expired, older generation (points to the
-  newest email), wrong finding status (§3.4), postpone limit reached, snapshot missing (restore).
+- GET /action?t=<token> → HTML confirmation page. Changes nothing (no DynamoDB writes).
+- POST /action (form field t) → claims the token with one TransactWriteItems (token: used = false AND not expired → used = true; ConditionCheck on the finding: same generation, required status (§3.4), postpone limit, restore dryRun = false), then acts and returns an HTML result page. If the action fails before changing anything, the token is given back (used = false).
+- Protect: CreateTags guardian:protect=true, then timeline.stop_timeline(..., "open", "protected", actor="action-link"). Postpone: timeline.start_timeline(..., "postpone", actor="action-link"). Restore: CreateVolume (gp3, the finding's availabilityZone) from snapshotId, tags = the snapshot's tags minus guardian:source-volume plus guardian:restored-from, then RESTORE_DONE email; the finding stays remediated. Protect and postpone also act when DRY_RUN is on (they only prevent or delay); a postponed timeline keeps the stack's dry-run.
+- Refusals (HTML page): 404 unknown token; 410 used, expired, older generation (points to the newest email), snapshot missing; 409 wrong finding status (§3.4), postpone limit reached, outside DEV_SCOPE. A link_refused audit entry is written only for POST refusals of known tokens; GET refusals are only logged. Also refused: 410 finding or resource no longer exists; 409 token generation newer than the finding's, restore without a recorded availabilityZone (the page points to the console), or a claim cancelled with no other reason (try again).
 
 ### 4.7 Scheduled events (EventBridge Scheduler → Lambda)
 `{ "source": "schedule", "job": "scan" | "daily-cost" | "daily-summary" | "digest" }`. Manual test runs send the same event.
@@ -360,6 +361,7 @@ to and including yesterday and overwrites their rows (Cost Explorer revises rece
 | `project` | text | project name; cost allocation tag |
 | `guardian:protect` | `true` | report-only; IAM denies stop / delete |
 | `guardian:source-volume` | volume id | on snapshots the Guardian creates |
+| `guardian:restored-from` | snapshot id | on volumes the Guardian restores |
 | `guardian:dev-scope` | a name prefix, e.g. `cg-dev-` | dev only: which personal stack may act on this test resource (§6) |
 | `email` | email | on IAM users, for the CloudTrail lookup |
 
@@ -369,7 +371,7 @@ to and including yesterday and overwrites their rows (Cost Explorer revises rece
 |---|---|---|
 | `NAME_PREFIX` | all | `cg-dev-` |
 | `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-dev-findings` |
-| `DRY_RUN` | engine, scanner (tag copying) | `true` |
+| `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
 | `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed |
 | `DETECTION_WINDOW_MINUTES` | scanner, engine (remediation `CHECK_EC2`) | `30` (demo) / `1440` |
@@ -478,3 +480,4 @@ budget amounts.
 - v2.15 — §8 edge takes `dashboard_username` (each deployment chooses its login; default `guardian`) (#38).
 - v2.16 — §3.1 SNAPSHOT_REMINDER attributes (sourceVolumeId, sizeGb) and who writes them; EBS realized savings
   rule; §4.3 CHECK_EBS returns sizeGb / availabilityZone; §6 RESTORE_LINK_DAYS is a workflow constant (#30).
+- v2.17 — §3.1 availabilityZone on remediated EBS findings; §4.6 action link flow (transaction claim, token give-back, protect / postpone in dry-run, restore details, refusal codes, link_refused on POST only); §5 guardian:restored-from (#31).

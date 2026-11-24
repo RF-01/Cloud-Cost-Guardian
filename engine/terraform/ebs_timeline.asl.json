@@ -495,10 +495,10 @@
       "Arguments": {
         "TableName": "${findings_table}",
         "Key": ${finding_key},
-        "UpdateExpression": "{% 'SET #st = :remediated, remediatedAt = :now, dryRun = :dryRun, timelineStep = :done' & ($del.dryRun = false ? ', snapshotId = :snap' : '') & ($savings != null ? ', realizedMonthlySavings = :savings' : '') %}",
+        "UpdateExpression": "{% 'SET #st = :remediated, remediatedAt = :now, dryRun = :dryRun, timelineStep = :done' & ($del.dryRun = false ? ', snapshotId = :snap' : '') & ($savings != null ? ', realizedMonthlySavings = :savings' : '') & ($exists($check.availabilityZone) ? ', availabilityZone = :az' : '') %}",
         "ConditionExpression": "generation = :gen AND #st = :inProgress",
         "ExpressionAttributeNames": { "#st": "status" },
-        "ExpressionAttributeValues": "{% $merge([{':remediated': {'S': 'remediated'}, ':now': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, ':dryRun': {'BOOL': $del.dryRun}, ':done': {'S': 'done'}, ':gen': {'N': $string($input.generation)}, ':inProgress': {'S': 'in_progress'}}, $del.dryRun = false ? {':snap': {'S': $snap.snapshotId}} : {}, $savings != null ? {':savings': {'N': $string($savings)}} : {}]) %}"
+        "ExpressionAttributeValues": "{% $merge([{':remediated': {'S': 'remediated'}, ':now': {'S': $fromMillis($millis(), '[Y0001]-[M01]-[D01]T[H01]:[m01]:[s01]Z')}, ':dryRun': {'BOOL': $del.dryRun}, ':done': {'S': 'done'}, ':gen': {'N': $string($input.generation)}, ':inProgress': {'S': 'in_progress'}}, $del.dryRun = false ? {':snap': {'S': $snap.snapshotId}} : {}, $savings != null ? {':savings': {'N': $string($savings)}} : {}, $exists($check.availabilityZone) ? {':az': {'S': $check.availabilityZone}} : {}]) %}"
       },
       "Retry": ${ddb_retry},
       "Catch": [

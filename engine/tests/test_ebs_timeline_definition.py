@@ -302,6 +302,10 @@ def test_mark_remediated_sets_contract_fields(sm):
     assert "':dryRun': {'BOOL': $del.dryRun}" in values
     assert "$del.dryRun = false ? {':snap': {'S': $snap.snapshotId}} : {}" in values
     assert "$savings != null ? {':savings': {'N': $string($savings)}} : {}" in values
+    # availabilityZone for the restore link (#31): whenever CHECK_EBS returned it, dry-run included.
+    assert update.endswith("& ($exists($check.availabilityZone) ? ', availabilityZone = :az' : '') %}")
+    assert "$exists($check.availabilityZone) ? {':az': {'S': $check.availabilityZone}} : {}" in values
+    assert "dryRun" not in update.split("availabilityZone")[1]  # not tied to the dry-run flag
     assert sm["States"]["MarkRemediated"]["Next"] == "DeleteConfirmation"
     resolved = sm["States"]["MarkResolved"]["Arguments"]
     assert resolved["UpdateExpression"] == "SET #st = :resolved, resolvedAt = :now, timelineStep = :done"
