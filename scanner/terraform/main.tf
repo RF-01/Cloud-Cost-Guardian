@@ -147,6 +147,7 @@ resource "aws_lambda_function" "scanner" {
       DEV_SCOPE                   = var.dev_scope
       DETECTION_WINDOW_MINUTES    = tostring(var.detection_window_minutes)
       EIP_STOPPED_THRESHOLD_HOURS = tostring(var.eip_stopped_threshold_hours)
+      MAX_RESTARTS                = "2"
       EC2_SFN_ARN                 = var.ec2_sfn_arn
       EBS_SFN_ARN                 = var.ebs_sfn_arn
       NOTIFY_FUNCTION_NAME        = var.notify_function_name

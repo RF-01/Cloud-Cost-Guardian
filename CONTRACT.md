@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.17 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.18 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -108,7 +108,7 @@ The scanner resolves it once the snapshot is gone (#35).
 | `open` / `in_progress` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present; or the workflow's `STOP_INSTANCE` found the instance already stopped by someone else (not dry-run). **Never applies to `remediated` findings** (see below). |
 | `in_progress` → `remediated` | engine workflow | after stop, or snapshot + delete; also in dry-run, with `dryRun = true` |
 | `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep` (the workflow state's name), `errorMessage` (≤ 500 chars), `timelineStep = done`; only with the same generation and status `in_progress`. A failure after the finding left `in_progress` (the `STOP_CONFIRMATION` email) only writes a `workflow_failed` audit entry and fails the execution; the status is unchanged. |
-| `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it |
+| `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it. The scanner does this on the next scan that still sees the problem (resource still idle / unattached, not report-only). At the limit the finding stays failed (dashboard) and the scanner only logs it; a team member resets it after fixing the cause by removing restartCount (`aws dynamodb update-item ... --update-expression 'REMOVE restartCount'`), and the next scan restarts it. |
 | **`remediated` → `resolved`** | scanner | **EC2 only**, in exactly two cases: (a) instance `state = running` **and** `LaunchTime > remediatedAt` (someone really started it again); (b) the instance no longer exists or is `terminated`. |
 | any → report-only | scanner (protect / autoscaling tag found), action Lambda (Protect), engine workflow (re-check) | scanner: `open` → set `reportOnlyReason`; `in_progress` / `failed` → `timeline.stop_timeline(id, type, "open", reason)`; `remediated` → unchanged. Action Lambda (Protect) as before: stop timeline, set `reportOnlyReason`, status `open`. Engine workflow re-check finds the protect tag → status `open`, `reportOnlyReason` `protected` |
 | report-only → normal | scanner | tag removed while status is `open`: REMOVE `reportOnlyReason`; the timeline starts on the same scan |
@@ -386,7 +386,7 @@ to and including yesterday and overwrites their rows (Cost Explorer revises rece
 | `BEDROCK_DAILY_CAP` | dashboard | `30` |
 | `BEDROCK_MAX_TOKENS` | digest, dashboard | `500` |
 | `BEDROCK_MAX_QUESTION_CHARS` | dashboard | `500` |
-| `MAX_POSTPONES`, `MAX_RESTARTS` | action, timeline | `2`, `2` |
+| `MAX_POSTPONES`, `MAX_RESTARTS` | action, scanner, timeline | `2`, `2` |
 | `EIP_STOPPED_THRESHOLD_HOURS` | scanner | `24` |
 
 Thresholds (CPU / network / disk) and the idle classification live in `common/idle.py` (used by the scanner and the
@@ -428,6 +428,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
 - IAM roles for a Lambda live in the module that owns the Lambda; lane C reviews them.
+- Engine also owns the workflow alarms (design §9.1): `<prefix>ec2-timeline-failed`, `<prefix>ec2-timeline-timed-out`, `<prefix>ebs-timeline-failed`, `<prefix>ebs-timeline-timed-out` (AWS/States ExecutionsFailed / ExecutionsTimedOut ≥ 1 in 5 min) → `team_topic_arn`.
 
 ## 9. Open values (to fill in as the team decides — design §24)
 
@@ -481,3 +482,4 @@ budget amounts.
 - v2.16 — §3.1 SNAPSHOT_REMINDER attributes (sourceVolumeId, sizeGb) and who writes them; EBS realized savings
   rule; §4.3 CHECK_EBS returns sizeGb / availabilityZone; §6 RESTORE_LINK_DAYS is a workflow constant (#30).
 - v2.17 — §3.1 availabilityZone on remediated EBS findings; §4.6 action link flow (transaction claim, token give-back, protect / postpone in dry-run, restore details, refusal codes, link_refused on POST only); §5 guardian:restored-from (#31).
+- v2.18 — §3.2 automatic restarts by the scanner and the manual reset; §6 MAX_RESTARTS also used by the scanner; §8 workflow alarms (#32).

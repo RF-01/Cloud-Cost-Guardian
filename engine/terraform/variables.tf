@@ -36,7 +36,7 @@ variable "notify_function_name" {
 }
 
 variable "team_topic_arn" {
-  description = "Team SNS topic (workflow alarms, task #32). Unused until then"
+  description = "Team SNS topic: action of the workflow alarms (alarms.tf, design §9.1)"
   type        = string
 }
 

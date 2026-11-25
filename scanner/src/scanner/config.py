@@ -2,7 +2,7 @@
 
 import os
 
-from common import idle
+from common import idle, timeline
 
 # EC2 idle thresholds and classify() live in common/idle.py (shared with the remediation re-check).
 DEFAULT_DETECTION_WINDOW_MINUTES = idle.DEFAULT_DETECTION_WINDOW_MINUTES
@@ -34,6 +34,12 @@ def scan_regions():
 def scan_max_workers():
     """SCAN_MAX_WORKERS: most regions scanned at once (default 8, at least 1)."""
     return max(1, _int_env("SCAN_MAX_WORKERS", DEFAULT_MAX_WORKERS))
+
+
+def max_restarts():
+    """MAX_RESTARTS (CONTRACT §6): read exactly as common/timeline.py does (same env var, same default)."""
+    _, env, default = timeline.COUNTERS["restart"]
+    return _int_env(env, default)
 
 
 def dev_scope():

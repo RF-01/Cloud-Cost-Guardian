@@ -825,3 +825,133 @@ def test_finding_opened_and_timeline_started(aws, linux, monkeypatch):
     assert entries["finding_opened"]["findingType"] == "EC2_IDLE"
     started = entries["timeline_started"]
     assert started["actor"] == "scanner" and started["generation"] == 1 and started["details"]["reason"] == "new"
+
+
+# ---------------------------------------------------------------- restarts (#32, CONTRACT §3.2 failed → in_progress)
+
+
+def _state_machine():
+    sfn = boto3.client("stepfunctions", region_name=REGION)
+    return sfn, sfn.create_state_machine(
+        name="cg-test-ebs-timeline", roleArn="arn:aws:iam::123456789012:role/r",
+        definition=json.dumps({"StartAt": "W", "States": {"W": {"Type": "Wait", "Seconds": 1, "End": True}}}),
+    )["stateMachineArn"]
+
+
+def _failed_volume(aws, **extra):
+    # Tagged, so the scan opens no MISSING_TAGS finding (and no audit entry) for it.
+    vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8, TagSpecifications=[
+        {"ResourceType": "volume", "Tags": tag_list({"owner": "d@example.com", "project": "p"})}])["VolumeId"]
+    aws["table"].put_item(Item=dict({"resourceId": vol, "findingType": "EBS_UNATTACHED", "status": "failed",
+                                     "generation": Decimal(2), "executionName": f"ebs-{vol}-gen2",
+                                     "executionArn": "arn:x:gen2", "failedStep": "Remediate",
+                                     "errorMessage": "boom"}, **extra))
+    return vol
+
+
+@pytest.mark.parametrize("count", [0, 1])
+def test_failed_finding_still_seen_is_restarted(aws, monkeypatch, capsys, count):
+    sfn, sm = _state_machine()
+    monkeypatch.setenv("EBS_SFN_ARN", sm)
+    monkeypatch.delenv("MAX_RESTARTS", raising=False)  # default 2
+    extra = {"restartCount": Decimal(count)} if count else {}
+    vol = _failed_volume(aws, **extra)
+    summary = handler.scan_region(REGION, now=later())
+
+    item = get(aws, vol, "EBS_UNATTACHED")
+    assert item["status"] == "in_progress"
+    assert item["generation"] == 3 and item["executionName"] == f"ebs-{vol}-gen3"
+    assert item["restartCount"] == count + 1
+    assert "failedStep" not in item and "errorMessage" not in item
+    assert sfn.describe_execution(executionArn=item["executionArn"])["status"] == "RUNNING"
+    assert summary["timelines"] == {"restart_started": 1}
+    started = [e for e in audit_entries(aws, vol) if e["event"] == "timeline_started"]
+    assert len(started) == 1 and started[0]["details"]["reason"] == "restart"
+
+
+@pytest.mark.parametrize("env, count", [(None, 2), ("1", 1), ("0", 0)])
+def test_restart_limit_reached_only_logs(aws, monkeypatch, capsys, env, count):
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+    if env is None:
+        monkeypatch.delenv("MAX_RESTARTS", raising=False)
+    else:
+        monkeypatch.setenv("MAX_RESTARTS", env)
+    calls = []
+    monkeypatch.setattr(timeline, "start_timeline", lambda *a: calls.append(a))
+    monkeypatch.setattr(timeline, "_sfn", lambda: pytest.fail("no StartExecution at the limit"))
+    vol = _failed_volume(aws, restartCount=Decimal(count))
+    capsys.readouterr()
+    summary = handler.scan_region(REGION, now=later())
+
+    assert calls == []
+    assert get(aws, vol, "EBS_UNATTACHED")["status"] == "failed"
+    assert summary["timelines"] == {"restart_limit": 1}
+    line = [e for e in logs(capsys) if e["action"] == "restart_timeline"]
+    assert line == [{"resourceId": vol, "findingType": "EBS_UNATTACHED", "action": "restart_timeline",
+                     "result": "limit", "restartCount": count}]
+    assert audit_entries(aws, vol) == []
+
+
+def test_report_only_failed_finding_not_restarted(aws, monkeypatch):
+    # A failed finding that is already report-only (e.g. stop_timeline could not run earlier) is left alone.
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+    calls = []
+    monkeypatch.setattr(timeline, "start_timeline", lambda *a: calls.append(a))
+    monkeypatch.setattr(timeline, "stop_timeline", lambda *a, **k: calls.append(("stop",) + a))
+    vol = _failed_volume(aws, reportOnlyReason="protected")
+    aws["ec2"].create_tags(Resources=[vol], Tags=[{"Key": "guardian:protect", "Value": "true"}])
+    summary = handler.scan_region(REGION, now=later())
+    assert calls == []
+    assert get(aws, vol, "EBS_UNATTACHED")["status"] == "failed"
+    assert summary["timelines"] == {}
+
+
+def test_restart_value_error_counted_not_raised(aws, monkeypatch, capsys):
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+
+    def refuse(rid, ftype, reason):
+        assert reason == "restart"
+        raise ValueError("reason 'restart' needs status 'failed', not 'open'")
+
+    monkeypatch.setattr(timeline, "start_timeline", refuse)
+    vol = _failed_volume(aws)
+    summary = handler.scan_region(REGION, now=later())
+    assert summary["timelines"] == {"restart_refused": 1}
+    assert any(e["resourceId"] == vol and e["action"] == "restart_timeline" and e["result"] == "refused"
+               for e in logs(capsys))
+
+
+def test_restart_other_error_counted_as_error(aws, monkeypatch):
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+
+    def boom(*a):
+        raise RuntimeError("throttled")
+
+    monkeypatch.setattr(timeline, "start_timeline", boom)
+    _failed_volume(aws)
+    summary = handler.scan_region(REGION, now=later())
+    assert summary["timelines"] == {"error": 1}
+
+
+def test_failed_finding_not_seen_is_not_restarted(aws, monkeypatch):
+    # The volume is attached again (no longer a problem): the scan never records it, so no restart.
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+    calls = []
+    monkeypatch.setattr(timeline, "start_timeline", lambda *a: calls.append(a))
+    aws["table"].put_item(Item={"resourceId": "vol-0gone", "findingType": "EBS_UNATTACHED", "status": "failed",
+                                "generation": Decimal(1), "executionName": "ebs-vol-0gone-gen1"})
+    summary = handler.scan_region(REGION, now=later())
+    assert calls == []
+    assert get(aws, "vol-0gone", "EBS_UNATTACHED")["status"] == "failed"
+    assert summary["timelines"] == {}
+
+
+def test_restart_counters_in_scan_summary_log(aws, monkeypatch, capsys):
+    monkeypatch.setenv("EBS_SFN_ARN", SFN_EBS)
+    monkeypatch.setattr(timeline, "start_timeline", lambda *a: {"result": "started", "finding": {}})
+    _failed_volume(aws)
+    _failed_volume(aws, restartCount=Decimal(2))
+    out = handler.handler({}, None)
+    assert out["totals"]["timelines"] == {"restart_started": 1, "restart_limit": 1}
+    scan_line = [e for e in logs(capsys) if e["action"] == "scan"][-1]
+    assert scan_line["totals"]["timelines"] == {"restart_started": 1, "restart_limit": 1}

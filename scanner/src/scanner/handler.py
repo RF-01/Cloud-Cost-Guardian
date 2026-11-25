@@ -126,12 +126,15 @@ class _Scan:
             return
         status = item.get("status")
         pending = status == "in_progress" and item.get("executionName") and not item.get("executionArn")
-        if status != "open" and not pending:
+        if status not in ("open", "failed") and not pending:
             return
         rid, ftype = item["resourceId"], item["findingType"]
         if not config.sfn_arn(ftype):
             self.timelines["skipped_no_state_machine"] += 1
             findings.log(rid, ftype, "start_timeline", "timeline skipped: no state machine")
+            return
+        if status == "failed":
+            self._maybe_restart(item)
             return
         try:
             out = timeline.start_timeline(rid, ftype, "new")
@@ -139,6 +142,25 @@ class _Scan:
         except Exception as err:  # one bad finding must not stop the scan
             self.timelines["error"] += 1
             findings.log(rid, ftype, "start_timeline", "error", error=str(err))
+
+    def _maybe_restart(self, item):
+        """CONTRACT §3.2 failed → in_progress: the problem is still there on this scan, so restart the timeline
+        while restartCount < MAX_RESTARTS. At the limit the finding stays failed and is only logged."""
+        rid, ftype = item["resourceId"], item["findingType"]
+        count = int(item.get("restartCount", 0))
+        if count >= config.max_restarts():
+            self.timelines["restart_limit"] += 1
+            findings.log(rid, ftype, "restart_timeline", "limit", restartCount=count)
+            return
+        try:
+            out = timeline.start_timeline(rid, ftype, "restart")
+            self.timelines["restart_" + out["result"]] += 1
+        except ValueError as err:  # e.g. the status changed since the upsert: not an error
+            self.timelines["restart_refused"] += 1
+            findings.log(rid, ftype, "restart_timeline", "refused", restartCount=count, error=str(err))
+        except Exception as err:  # one bad finding must not stop the scan
+            self.timelines["error"] += 1
+            findings.log(rid, ftype, "restart_timeline", "error", error=str(err))
 
     def missing_tags(self, resource_id, resource_type, tags, attrs):
         missing = [t for t in REQUIRED_TAGS if not tags.get(t, "").strip()]
