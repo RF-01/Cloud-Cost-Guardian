@@ -8,6 +8,10 @@ Memory: every session normally parses the service models (JSON) again; EC2's alo
 were ~220 MB of a 256 MB Lambda. All sessions therefore share one botocore data loader (read-only parsed JSON);
 sessions, clients and their credentials stay per thread. `preload()` loads the models in the main thread before
 the workers start, so workers only read the loader's cache.
+
+Notify (task #36): `notify_client` is a dedicated Lambda client with NO automatic retry (total_max_attempts 1;
+botocore's `max_attempts` counts retries, so max_attempts=1 would still retry once). A retry after a read timeout
+could send the same email twice. read_timeout 65 s covers Notify's 60 s timeout.
 """
 
 import threading
@@ -19,7 +23,10 @@ from botocore.config import Config
 
 CONFIG = Config(connect_timeout=5, read_timeout=20, retries={"mode": "standard", "max_attempts": 4})
 
-SERVICES = ("ec2", "cloudwatch", "dynamodb", "cloudtrail", "iam")  # what a region worker uses (preloaded)
+# No automatic retry: a retried Invoke could send the email twice (CONTRACT §4.8).
+NOTIFY_CONFIG = Config(connect_timeout=5, read_timeout=65, retries={"mode": "standard", "total_max_attempts": 1})
+
+SERVICES = ("ec2", "cloudwatch", "dynamodb", "cloudtrail", "iam", "lambda")  # what a region worker uses (preloaded)
 
 _local = threading.local()
 _loader = botocore.loaders.create_loader()
@@ -43,6 +50,11 @@ def preload(region):
 
 def client(service, region):
     return session().client(service, region_name=region, config=CONFIG)
+
+
+def notify_client(region):
+    """This thread's Lambda client for invoking Notify (NOTIFY_CONFIG: no automatic retry)."""
+    return session().client("lambda", region_name=region, config=NOTIFY_CONFIG)
 
 
 def resource(service, region):

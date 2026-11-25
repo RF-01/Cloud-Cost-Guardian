@@ -16,6 +16,7 @@ AUDIT_TABLE = "cg-test-audit"
 ATTACH_TABLE = "cg-test-volume-attachments"
 CREATOR_TABLE = "cg-test-creator-lookups"
 SCOPE = "cg-dev-"
+NOTIFY = "cg-test-notify"
 OWNED = {"owner": "Alice@Example.com", "project": "demo", "Name": "web-1"}
 
 
@@ -50,6 +51,42 @@ class FakeCloudTrail:
         return out
 
 
+class FakeLambda:
+    """The Notify Lambda client (task #36): records every Invoke; `fail` = an exception every call raises,
+    `function_error` = Notify raised (FunctionError in the response)."""
+
+    def __init__(self):
+        self.calls = []
+        self.regions = []  # the region each client was built for
+        self.fail = None
+        self.function_error = None
+        self._lock = threading.Lock()
+
+    def invoke(self, FunctionName, InvocationType, Payload):
+        event = json.loads(Payload)
+        with self._lock:
+            self.calls.append({"FunctionName": FunctionName, "InvocationType": InvocationType, "event": event})
+        if self.fail:
+            raise self.fail
+        if self.function_error:
+            body = json.dumps({"errorMessage": self.function_error, "errorType": "ValueError"}).encode()
+            return {"StatusCode": 200, "FunctionError": "Unhandled", "Payload": _Body(body)}
+        out = {"sent": True, "recipient": event["to"] or "team@example.com", "fallback": False,
+               "messageId": f"m-{len(self.calls)}", "tokensCreated": 0}
+        return {"StatusCode": 200, "Payload": _Body(json.dumps(out).encode())}
+
+    def events(self, template=None):
+        return [c["event"] for c in self.calls if template is None or c["event"]["template"] == template]
+
+
+class _Body:
+    def __init__(self, data):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+
 @pytest.fixture
 def aws(monkeypatch):
     for var in ("DEV_SCOPE", "EC2_SFN_ARN", "EBS_SFN_ARN", "DETECTION_WINDOW_MINUTES",
@@ -65,6 +102,7 @@ def aws(monkeypatch):
     monkeypatch.setenv("TABLE_CREATOR_LOOKUPS", CREATOR_TABLE)
     monkeypatch.setenv("SCAN_REGIONS", REGION)
     monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("NOTIFY_FUNCTION_NAME", NOTIFY)
     with mock_aws():
         table = boto3.resource("dynamodb", region_name=REGION).create_table(
             TableName=TABLE,
@@ -97,10 +135,18 @@ def aws(monkeypatch):
                             else real_client(service, region))
         sleeps = []
         monkeypatch.setattr(creator, "_pause", sleeps.append)  # no real pauses between LookupEvents calls
+        # Notify: a fake that records every email (task #36).
+        notify = FakeLambda()
+
+        def notify_client(region):
+            notify.regions.append(region)
+            return notify
+
+        monkeypatch.setattr(clients, "notify_client", notify_client)
         ec2 = boto3.client("ec2", region_name=REGION)
         yield {"table": table, "ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION),
                "audit": audit_table, "attachments": attach_table, "creator": creator_table,
-               "cloudtrail": cloudtrail, "sleeps": sleeps,
+               "cloudtrail": cloudtrail, "sleeps": sleeps, "notify": notify,
                "ami": ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]}
         findings.reset_clients()
         timeline.reset_clients()
@@ -672,13 +718,14 @@ def stub_scan(monkeypatch, fail=()):
     """Replace scan_region: records the regions it is called with; raises for the regions in `fail`."""
     seen = []
 
-    def fake(region, now=None, active=None):
+    def fake(region, now=None, active=None, budget=None):
         seen.append(region)
         if region in fail:
             raise RuntimeError(f"boom in {region}")
         return {"region": region, "findings": {"EBS_UNATTACHED": 1}, "timelines": {"started": 1},
                 "skippedOutOfScope": 2, "reportOnly": {}, "tagCopy": {"copied": 1, "would_copy": 2},
-                "attachmentRecords": {"written": 3}, "creatorLookup": {"found": 1, "skipped_cap": 2}}
+                "attachmentRecords": {"written": 3}, "creatorLookup": {"found": 1, "skipped_cap": 2},
+                "notices": {"sent": 1}}
 
     monkeypatch.setattr(handler, "scan_region", fake)
     return seen
@@ -772,7 +819,7 @@ def test_one_failing_region_does_not_stop_the_others(aws, monkeypatch, capsys):
                                  "reportOnly": {}, "tagCopy": {"copied": 2, "would_copy": 4},
                                  "attachmentRecords": {"written": 6},
                                  "creatorLookup": {"found": 2, "skipped_cap": 4}, "resolution": {},
-                                 "skippedOutOfScope": 4}
+                                 "notices": {"sent": 2}, "skippedOutOfScope": 4, "activeFindingsLoaded": 0}
     assert summary["slowestRegion"]["region"] in seen and summary["durationSeconds"] >= 0
     entries = logs(capsys)
     assert any(e["action"] == "scan_region" and e["region"] == "eu-west-1" and e["errorType"] == "RuntimeError"

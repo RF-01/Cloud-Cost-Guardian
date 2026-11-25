@@ -12,6 +12,9 @@ DEFAULT_MAX_WORKERS = 8
 # Creator lookup (design §8.6, CONTRACT §3.5, #34).
 UNKNOWN_RETRY_HOURS = 24  # an `unknown` creator-lookups record is looked up again after this
 MAX_LOOKUPS_PER_REGION = 20  # resources looked up in CloudTrail per region per scan; the rest wait
+# Scanner emails (CONTRACT §4.8, #36): SES sandbox allows 200 emails a day for the whole account.
+MAX_NOTICES_PER_REGION = 10  # emails per region per scan
+MAX_NOTICES_PER_SCAN = 30  # emails per invocation, all regions together
 
 
 def _int_env(name, default):
@@ -57,6 +60,10 @@ def table_volume_attachments():
 
 def table_creator_lookups():
     return os.environ["TABLE_CREATOR_LOOKUPS"]
+
+
+def notify_function_name():
+    return os.environ.get("NOTIFY_FUNCTION_NAME", "").strip()
 
 
 def dev_scope():

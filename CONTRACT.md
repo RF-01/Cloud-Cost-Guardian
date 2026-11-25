@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.21 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.22 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -273,9 +273,9 @@ R = required, O = optional. Every template also gets `links` from Notify (§4.1)
 | `STOP_CONFIRMATION` | engine workflow | R: `resourceId`, `region`, `realizedMonthlySavings`, `dryRun`, `elasticIps` (list, may be empty). O: `name` |
 | `DELETE_CONFIRMATION` | engine workflow | R: `resourceId`, `region`, `sizeGb`, `snapshotId`, `realizedMonthlySavings`, `dryRun`. O: `name`, `availabilityZone` |
 | `WORKFLOW_FAILED` | engine Catch | R: `resourceId`, `region`, `findingType`, `failedStep`, `errorMessage`, `progress` (e.g. "snapshot snap-123 created; volume not deleted") |
-| `REPORT_NOTICE` | scanner (new report-only finding, once) | R: `resourceId`, `resourceType`, `region`, `findingType`, `estimatedMonthlyCost`, `reason` (`eip_unassociated` \| `eip_on_stopped_instance` \| `autoscaling`). O: `name`, `autoScalingGroup` |
-| `MISSING_TAGS` | scanner (once, when found) | R: `resourceId`, `resourceType`, `region`, `missingTags` (list). O: `creatorLookup` (`unknown` reason text) |
-| `MISSING_TAGS_GROUPED` | scanner (once, when found) | R: `instanceId`, `region`, `resources` (list of `{resourceId, resourceType, missingTags}`) |
+| `REPORT_NOTICE` | scanner, once per episode: new / reopened `EIP_*` finding, or Auto Scaling report-only new or newly applied; never for `protected` (§4.8) | R: `resourceId`, `resourceType`, `region`, `findingType`, `estimatedMonthlyCost`, `reason` (`eip_unassociated` \| `eip_on_stopped_instance` \| `autoscaling`). O: `name`, `autoScalingGroup` |
+| `MISSING_TAGS` | scanner, once per episode (new / reopened), only when the Guardian cannot fix the tags itself (§4.8) | R: `resourceId`, `resourceType`, `region`, `missingTags` (list). O: `creatorLookup` (`unknown` reason text) |
+| `MISSING_TAGS_GROUPED` | scanner, as `MISSING_TAGS`, when an instance and resources attached to it are all untagged (§4.8) | R: `instanceId`, `region`, `resources` (list of `{resourceId, resourceType, missingTags}`) |
 | `RESTORE_DONE` | action Lambda | R: `sourceVolumeId`, `snapshotId`, `newVolumeId`, `availabilityZone`, `region` |
 | `DIGEST` | digest Lambda | R: `findings` (list, below), `protected` (list of `{resourceId, resourceType, region, estimatedMonthlyCost, name?}`), `snapshots` (list of `{snapshotId, sourceVolumeId, region, sizeGb, monthlyCost, ageDays}`), `budgetAlerts` (list of `{budgetName, thresholdType, threshold, receivedAt}`), `missingTags` (list of `{resourceId, resourceType, region, missingTags}`). O: `aiSummary` (empty if Bedrock failed) |
 
@@ -352,6 +352,49 @@ No other code calls `StartExecution` / `StopExecution` directly.
 
 `daily-cost` also takes an optional `"days"` (integer 1–90, default 3): it fetches the last `days` full UTC days up
 to and including yesterday and overwrites their rows (Cost Explorer revises recent days, so every run re-fetches them).
+
+### 4.8 Scanner emails (design §10.1 / §10.2)
+
+The scanner calls Notify (§4.1) with `REPORT_NOTICE`, `MISSING_TAGS` and `MISSING_TAGS_GROUPED`.
+
+- **When:** once per episode. An email is queued only when the finding is created on this scan, or reopened on this
+  scan (§3.2, new `firstSeenAt`; `MISSING_TAGS` too), or (`REPORT_NOTICE` only) when `reportOnlyReason`
+  `autoscaling` is newly applied to an existing finding. Every other scan sends nothing for that finding.
+- **No retry:** an email that failed or was skipped is never sent later (a retry loop could resend mail); the
+  finding still appears in the digest. Emails queued in a region whose scan raised before the send step are lost
+  for the same reason.
+- **Dev scope:** never for a resource outside `DEV_SCOPE` (§6); such findings never trigger Notify and are counted
+  nowhere.
+- **`REPORT_NOTICE`:** `EIP_UNASSOCIATED` → reason `eip_unassociated`; `EIP_ON_STOPPED_INSTANCE` →
+  `eip_on_stopped_instance`; `EC2_IDLE` / `EBS_UNATTACHED` with `reportOnlyReason` `autoscaling` → `autoscaling`,
+  `autoScalingGroup` = the `aws:autoscaling:groupName` tag. `protected`, incl. a protected Elastic IP (tag
+  `guardian:protect` = `true`, trimmed, any case, §5; EIP findings have no `reportOnlyReason`): no email (EC2 /
+  EBS: digest "Protected" section only; a protected Elastic IP counts `suppressed_protected`).
+  `to` = the finding's `owner`, or null (team address).
+- **Missing tags, covered cases (no email):** decided per new / reopened `MISSING_TAGS` finding with this scan's
+  state. (1) `suppressed_covered`: the resource is an in-use volume or an instance-associated Elastic IP and every
+  missing key is copied (dry-run: would be copied) from its instance, or its instance has the key now, or (owner)
+  the instance's creator lookup returned `found`; a key whose real copy failed on this scan is not covered.
+  (2) `suppressed_creator_found`: `owner` is missing and this resource's creator lookup returned `found` (fresh or
+  stored; also in dry-run, where the tag is not written). Otherwise (copy failed, lookup unknown or not done, not
+  attached, instance also untagged) an email is sent.
+- **Grouping:** if an in-use volume or instance-associated Elastic IP has an emailable finding and its instance also
+  has one on this scan, the region sends ONE `MISSING_TAGS_GROUPED` to the team (`to` null): `instanceId`, `region`,
+  `resources` = the attached resources only; its `findings` = the instance's finding and every attached resource's
+  finding. Everything else gets a single `MISSING_TAGS`: `to` = the resource's `owner`, or null; `creatorLookup` =
+  a short text for the reason of the resource's `unknown` creator-lookups record (§3.5), absent otherwise.
+- **The call:** synchronous Invoke (RequestResponse) of `NOTIFY_FUNCTION_NAME` in us-west-2 (whatever region is
+  scanned), after the detection rules and before the resolve pass, never raising. `findings` items:
+  `{resourceId, findingType, generation (0 if none), actions: []}`. No automatic retry on the client (a retry after
+  a timeout could send twice). A `FunctionError` or any exception counts as `error`. `DRY_RUN` does not suppress
+  these emails (§4.1).
+- **Caps:** at most 10 emails per region per scan and 30 per invocation (all regions; reset every invocation);
+  over either → `skipped_cap`. After the first error in a region, nothing more is sent there on that scan
+  (`skipped_error`). Skipped emails are only logged.
+- **Counters** (per region and in the scan totals, `notices`): `sent`, `error`, `skipped_cap`, `skipped_error`
+  (per email; a grouped email counts once), `suppressed_covered`, `suppressed_creator_found`, `suppressed_protected` (per finding). One JSON
+  log line per email (resourceIds, template, result). No audit entry of its own (Notify writes none for these
+  templates).
 
 ## 5. Tags
 
@@ -489,3 +532,7 @@ budget amounts.
   permanent, `unknown` retried after 24 h, `reason`), `owner_found` audit, dry-run = log only (#34).
 - v2.21 — §3.2 resolve on positive evidence (also from `failed`, `SNAPSHOT_REMINDER` ends when the snapshot is
   gone) and reopen rules; §3.3 details of `finding_resolved` / `finding_reopened` (#35).
+- v2.22 — §4.2 / new §4.8: scanner emails (REPORT_NOTICE once per episode for EIP findings and Auto Scaling
+  report-only findings, never for protected (incl. a protected Elastic IP); MISSING_TAGS / MISSING_TAGS_GROUPED once per episode, only when the
+  Guardian cannot fix the tags itself; dev scope only; no retry; caps 10 per region and 30 per scan, a region stops
+  sending after its first error; DRY_RUN does not suppress) (#36).

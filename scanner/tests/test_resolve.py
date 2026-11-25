@@ -533,10 +533,10 @@ def test_failing_region_resolves_nothing(aws, monkeypatch):
     put(aws, "vol-0east", "EBS_UNATTACHED", "open", region="us-east-1")
     real_scan = handler.scan_region
 
-    def scan(region, now=None, active=None):
+    def scan(region, now=None, active=None, budget=None):
         if region == "us-east-1":
             raise RuntimeError("DescribeVolumes failed")
-        return real_scan(region, now=now, active=active)
+        return real_scan(region, now=now, active=active, budget=budget)
 
     monkeypatch.setattr(handler, "scan_region", scan)
     monkeypatch.setenv("SCAN_REGIONS", "us-west-2,us-east-1")

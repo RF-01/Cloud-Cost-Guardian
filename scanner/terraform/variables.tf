@@ -40,7 +40,7 @@ variable "ebs_sfn_arn" {
 }
 
 variable "notify_function_name" {
-  description = "Notify Lambda name (NOTIFY_FUNCTION_NAME). Not invoked yet (emails come in task #36)"
+  description = "Notify Lambda name (NOTIFY_FUNCTION_NAME), in this stack's region: the scanner invokes it for REPORT_NOTICE / MISSING_TAGS / MISSING_TAGS_GROUPED (CONTRACT §4.8); the IAM policy allows lambda:InvokeFunction on this function only"
   type        = string
 }
 

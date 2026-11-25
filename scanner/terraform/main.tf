@@ -2,6 +2,7 @@
 # {"source": "schedule", "job": "scan"} (CONTRACT §4.7).
 
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 locals {
   account_id   = data.aws_caller_identity.current.account_id
@@ -9,6 +10,9 @@ locals {
   scanner_src  = "${local.repo_root}/scanner/src/scanner"
   common_src   = "${local.repo_root}/common"
   scanner_name = "${var.name_prefix}scanner"
+
+  # This stack's Notify function (platform core), in the region we deploy to (CONTRACT §1).
+  notify_function_arn = "arn:aws:lambda:${data.aws_region.current.region}:${local.account_id}:function:${var.notify_function_name}"
 
   sfn_arns       = compact([var.ec2_sfn_arn, var.ebs_sfn_arn])
   execution_arns = [for arn in local.sfn_arns : "${replace(arn, ":stateMachine:", ":execution:")}:*"]
@@ -184,6 +188,14 @@ data "aws_iam_policy_document" "scanner" {
         values   = [condition.value]
       }
     }
+  }
+
+  # Scanner emails (CONTRACT §4.8, task #36): REPORT_NOTICE / MISSING_TAGS / MISSING_TAGS_GROUPED, one synchronous
+  # Invoke per email, only on this stack's Notify function.
+  statement {
+    sid       = "InvokeNotify"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [local.notify_function_arn]
   }
 
   # common/timeline.py: only when the engine's state machines exist.
