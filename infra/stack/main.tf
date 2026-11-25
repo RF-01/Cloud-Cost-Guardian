@@ -21,7 +21,7 @@ locals {
 
 # ---------------------------------------------------------------------------
 # Lane modules, in CONTRACT §8 order (a straight chain, no cycles):
-#   platform core  ──►  engine, scanner, dashboard  ──►  platform edge
+#   platform core  ──►  engine, scanner, dashboard  ──►  platform edge, schedules
 #
 # All commented out until each module exists. Each lane uncomments ONLY its own block.
 # No depends_on between lane modules (CONTRACT §8): the wiring below is the only ordering.
@@ -39,6 +39,10 @@ module "platform_core" {
   dry_run      = var.dry_run
   team_email   = var.team_email
   sender_email = var.sender_email
+
+  budgets_enabled    = var.budgets_enabled
+  account_budget_usd = var.account_budget_usd
+  project_budgets    = var.project_budgets
 }
 
 # --- Lane A: engine ----------------------------------------------------------
@@ -125,4 +129,28 @@ module "platform_edge" {
   origin_secret        = var.origin_secret
   dashboard_username   = var.dashboard_username
   dashboard_password   = var.dashboard_password
+}
+
+# --- Lane C: schedules -------------------------------------------------------
+# Outputs (§8): schedule_names, schedule_group_name.
+# The scanner module has no scanner_function_name output, so the name is taken from its ARN.
+# digest_enabled = false (no digest schedule) and digest_function_arn = "" until the dashboard module outputs it;
+# #42 sets both. Which schedules exist depends only on digest_enabled, never on an ARN (unknown on a fresh stack).
+
+module "schedules" {
+  source = "../../platform/terraform/schedules"
+
+  name_prefix = var.name_prefix
+  owner_email = var.owner_email
+  dry_run     = var.dry_run
+
+  schedules_enabled          = var.schedules_enabled
+  scanner_function_arn       = module.scanner.scanner_function_arn
+  scanner_function_name      = element(split(":", module.scanner.scanner_function_arn), 6)
+  daily_cost_function_arn    = module.dashboard.daily_cost_function_arn
+  daily_summary_function_arn = module.dashboard.daily_summary_function_arn
+  digest_enabled             = false
+  digest_function_arn        = ""
+  dlq_arn                    = module.platform_core.dlq_arn
+  team_topic_arn             = module.platform_core.team_topic_arn
 }

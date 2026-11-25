@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.22 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.23 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -192,7 +192,7 @@ Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>
 | `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt`. One row per in-scope volume seen `in-use` on a scan, overwritten every scan, never deleted (the last known instance stays after the volume is orphaned); no TTL. | scanner → scanner |
 | `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `actionsTakenDryRun`, `createdAt`, `sample` (BOOL, seed rows only) | daily-summary → dashboard, digest |
 | `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `project#untagged` \| `total`) | `amount` (N, USD **per day**, rounded to **4** decimals: an exception to §2's 2-decimal monthly money, since daily amounts are fractions of a cent), `estimated` (BOOL, Cost Explorer's `Estimated`), `fetchedAt` | daily-cost → dashboard, digest |
-| `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold`, `message`, `day` | budget-subscriber → dashboard, digest |
+| `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `receivedAt` (= the SNS `Timestamp`, §2 seconds), `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold` (N, USD), `budgetedAmount` (N, USD), `amount` (N, USD: the actual or forecasted amount), `message` (raw text, ≤ 2000 chars, untrusted), `subject` (≤ 200 chars), `messageId` (SNS `MessageId`), `day` (= `receivedAt[:10]`). Every attribute except the keys, `message` and `day` is optional: present only when parsed (§4.9). Only AWS Budgets alerts are stored (alarm messages on the topic are skipped). | budget-subscriber → dashboard, digest |
 | `<prefix>counters` | `counterId` (e.g. `bedrock#2026-11-20`) | `count` (N), `ttl` | dashboard (conditional update) |
 
 daily-summaries notes: one item per UTC day, overwritten by a re-run; the findings part is a snapshot at run time.
@@ -202,6 +202,10 @@ SNAPSHOT_REMINDER and include report-only; missing owner → `unknown`, missing 
 `actionsTaken` = instance_stopped + volume_deleted that day, dry-run included (`actionsTakenDryRun` = those with
 dryRun true). A remediated finding without `dryRun` counts as dry-run.
 Demo seed rows carry sample = true; the dashboard marks them, the digest ignores them.
+
+budget-alerts notes: idempotent writes (§4.9). PutItem with condition `attribute_not_exists(budgetName) OR
+messageId = :mid`: an SNS redelivery (same `messageId`) is stored once; a different alert with the same
+`budgetName` + `receivedAt` moves to `receivedAt` + 1 s (and `day` with it), at most 5 times, then the invocation fails.
 
 bill-history notes: amounts are usage cost **before credits** (Cost Explorer `UnblendedCost`, filter `RECORD_TYPE = Usage`;
 net of credits every amount would be ~$0). Spend without a `project` tag is `project#untagged`. `total` = sum of
@@ -350,6 +354,18 @@ No other code calls `StartExecution` / `StopExecution` directly.
 ### 4.7 Scheduled events (EventBridge Scheduler → Lambda)
 `{ "source": "schedule", "job": "scan" | "daily-cost" | "daily-summary" | "digest" }`. Manual test runs send the same event.
 
+Schedules (module `platform/terraform/schedules`, group `<prefix>schedules`, schedule `<prefix><job>`; all UTC, no
+flexible window; `schedules_enabled = false` creates them DISABLED):
+
+| Job | Cron (UTC) | When | Scheduler retries | Lambda async retries |
+|---|---|---|---|---|
+| `scan` | `cron(7 */3 * * ? *)` | every 3 h at :07 | 0 | **0** (a failed / timed-out scan is not retried; the next one comes within 3 h; alarm `<prefix>scanner-errors`) |
+| `daily-cost` | `cron(20 5 * * ? *)` | 05:20 daily | 2 | default 2, then DLQ (rows are overwritten, a retry is safe) |
+| `daily-summary` | `cron(40 23 * * ? *)` | 23:40 daily (late in the day, after its activity) | 2 | default 2, then DLQ |
+| `digest` | `cron(30 6 ? * MON *)` | Monday 06:30 | 2 | default; the schedule is created when `digest_enabled` is true (#42) |
+
+Scheduler's retries cover only failed deliveries (the Invoke call); a failed delivery goes to the core DLQ.
+
 `daily-cost` also takes an optional `"days"` (integer 1–90, default 3): it fetches the last `days` full UTC days up
 to and including yesterday and overwrites their rows (Cost Explorer revises recent days, so every run re-fetches them).
 
@@ -395,6 +411,24 @@ The scanner calls Notify (§4.1) with `REPORT_NOTICE`, `MISSING_TAGS` and `MISSI
   (per email; a grouped email counts once), `suppressed_covered`, `suppressed_creator_found`, `suppressed_protected` (per finding). One JSON
   log line per email (resourceIds, template, result). No audit entry of its own (Notify writes none for these
   templates).
+
+### 4.9 Budget alert subscriber (SNS → Lambda, lane C)
+
+Input: the SNS event of the team topic (`Records[].Sns` with `MessageId`, `Timestamp`, `Subject`, `Message`).
+For each record:
+- `Message` is JSON with `AlarmName` (CloudWatch alarm) → skipped (`skipped: alarm`), nothing written.
+- AWS Budgets alert (`Subject` starts with `AWS Budgets:` or `Message` contains `Budget Name:`) → parsed and
+  stored in `<prefix>budget-alerts` (§3.5). AWS does not document the exact text, so each field comes from its own
+  `Label: value` line, case-insensitive: `Budget Name:` (fallback: the Subject `AWS Budgets: <name> has exceeded
+  your alert threshold`), `Alert Type:` → `thresholdType` (only `ACTUAL` / `FORECASTED`; fallback: the one
+  `<TYPE> Amount:` line present), `Alert Threshold:` → `threshold`, `Budgeted Amount:` → `budgetedAmount`,
+  `<thresholdType> Amount:` → `amount`. Money is read only from a `$` / `USD` amount (a percentage is not stored),
+  2 decimals.
+- Anything else → skipped (`skipped: unknown`). A Budgets message without a budget name → skipped.
+- **Nothing is guessed:** a field that can't be parsed is omitted.
+- One JSON log line per record (`budgetName`, `thresholdType`, `result`). DynamoDB errors other than the condition
+  are raised (Lambda retries the async invocation, then the DLQ).
+- Role: logs on its own log group, `dynamodb:PutItem` on budget-alerts, `sqs:SendMessage` on the DLQ. Nothing else.
 
 ## 5. Tags
 
@@ -453,16 +487,17 @@ remediation re-check), with the values decided by the team (design §24).
 Each lane exposes modules called from `infra/stack/main.tf`, in this order (a straight chain, no cycles):
 
 ```
-platform core  ──►  engine, scanner, dashboard  ──►  platform edge
+platform core  ──►  engine, scanner, dashboard  ──►  platform edge, schedules
 ```
 
 | Module | Inputs (besides `name_prefix`, `owner_email`, `dry_run`) | Outputs |
 |---|---|---|
-| `platform/terraform/core` | `team_email`, `sender_email` | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
+| `platform/terraform/core` | `team_email`, `sender_email`, `budgets_enabled`, `account_budget_usd`, `project_budgets` (map(number), key = `project` tag value) | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
 | `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
 | `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_username`, `dashboard_password` (all three sensitive) | `dashboard_url` |
+| `platform/terraform/schedules` | `scanner_function_arn`, `scanner_function_name`, `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_enabled` (bool, default false: creates the digest schedule; the schedule set depends only on this, never on ARNs), `digest_function_arn` (default `""`; required when `digest_enabled`), `dlq_arn`, `team_topic_arn`, `schedules_enabled` | `schedule_names` (map keyed by job), `schedule_group_name` |
 
 - `timeline_waits` = object {ec2_before_final, ec2_before_action, ebs_before_final, ebs_before_action} in seconds (defaults §4.4);
   these and `detection_window_minutes`, `eip_stopped_threshold_hours`, `postpone_seconds` are variables of infra/stack.
@@ -471,12 +506,18 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
 - IAM roles for a Lambda live in the module that owns the Lambda; lane C reviews them.
+- Core owns the AWS Budgets (`<prefix>account-monthly`, `<prefix>project-<name>` filtered on `user:project$<name>`;
+  usage before credits; ACTUAL > 80 %, ACTUAL > 100 %, FORECASTED > 100 % → `team_topic_arn`; no budget actions)
+  and the budget subscriber. The schedules module owns the scheduler role (`<prefix>scheduler-role`), the
+  scanner's async retry setting (0) and the alarm `<prefix>scanner-errors` (AWS/Lambda Errors ≥ 1 in 5 min →
+  `team_topic_arn`).
 - Engine also owns the workflow alarms (design §9.1): `<prefix>ec2-timeline-failed`, `<prefix>ec2-timeline-timed-out`, `<prefix>ebs-timeline-failed`, `<prefix>ebs-timeline-timed-out` (AWS/States ExecutionsFailed / ExecutionsTimedOut ≥ 1 in 5 min) → `team_topic_arn`.
 
 ## 9. Open values (to fill in as the team decides — design §24)
 
 Detection thresholds · real detection window · Elastic IP "stopped too long" threshold ·
-budget amounts.
+budget amounts (now infra/stack variables `account_budget_usd`, `project_budgets`; defaults account $5, project
+`cost-guardian` $5; thresholds 80 % / 100 % actual, 100 % forecast; open until the team confirms).
 (Defaults already set here: postpone = 7 days, max 2 postpones, max 2 restarts, restore link = 30 days, allowed instance types = t3.micro, t3.small (launch guardrails, `infra/shared`), Bedrock: Nova 2 Lite via `us.amazon.nova-2-lite-v1:0`, 30 questions/day, 500 output tokens, 500-char questions.)
 
 ## 10. Change log
@@ -536,3 +577,6 @@ budget amounts.
   report-only findings, never for protected (incl. a protected Elastic IP); MISSING_TAGS / MISSING_TAGS_GROUPED once per episode, only when the
   Guardian cannot fix the tags itself; dev scope only; no retry; caps 10 per region and 30 per scan, a region stops
   sending after its first error; DRY_RUN does not suppress) (#36).
+- v2.23 — §3.5 / §4.7 / new §4.9 / §8 / §9: EventBridge schedules (scan every 3 h, daily-cost 05:20, daily-summary
+  23:40, digest Mon 06:30 UTC; scan not retried), AWS Budgets (account + per project, usage before credits) to the
+  team topic, budget alert subscriber (idempotent, alarms skipped), schedules module (#37).

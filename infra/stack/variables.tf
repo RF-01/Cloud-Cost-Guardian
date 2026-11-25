@@ -162,3 +162,29 @@ variable "postpone_seconds" {
   type        = number
   default     = 604800
 }
+
+# --- Schedules and budgets (task #37, CONTRACT §4.7 / §8 / §9) ---------------------------------------------
+
+variable "schedules_enabled" {
+  description = "false creates the EventBridge schedules DISABLED (scan / daily-cost / daily-summary / digest only run when invoked by hand)"
+  type        = bool
+  default     = true
+}
+
+variable "budgets_enabled" {
+  description = "Create the AWS Budgets of this stack (account + per project), alerting the team topic"
+  type        = bool
+  default     = true
+}
+
+variable "account_budget_usd" {
+  description = "Monthly account budget in USD, usage before credits (alerts at 80 % / 100 % actual, 100 % forecast)"
+  type        = number
+  default     = 5
+}
+
+variable "project_budgets" {
+  description = "Monthly budget in USD per project tag value, usage before credits"
+  type        = map(number)
+  default     = { "cost-guardian" = 5 }
+}

@@ -35,3 +35,16 @@ timeline_waits = {
 detection_window_minutes    = 30
 eip_stopped_threshold_hours = 24
 postpone_seconds            = 604800
+
+# Schedules (CONTRACT §4.7, UTC): scan every 3 h, daily-cost 05:20, daily-summary 23:40, digest Mon 06:30.
+# false = the schedules exist but are DISABLED (run the Lambdas by hand with {"source":"schedule","job":"..."}).
+schedules_enabled = true
+
+# AWS Budgets (CONTRACT §9; amounts still open until the team confirms). Usage before credits; alerts at
+# 80 % / 100 % actual and 100 % forecast go to the team topic. Budgets are account-wide: every stack with
+# budgets_enabled = true adds its own copies (and their emails), so personal stacks may set it to false.
+budgets_enabled    = true
+account_budget_usd = 5
+project_budgets = {
+  "cost-guardian" = 5
+}
