@@ -11,7 +11,7 @@ variable "owner_email" {
 }
 
 variable "dry_run" {
-  description = "Passed to the scanner as DRY_RUN (tag copying, and into workflow input via common/timeline.py)"
+  description = "Passed to the scanner as DRY_RUN: tag copying only logs when true (CONTRACT §6); also passed into the workflow input by common/timeline.py"
   type        = bool
 }
 
@@ -50,7 +50,7 @@ variable "scan_regions" {
 }
 
 variable "dev_scope" {
-  description = "Empty in the team stack; the name prefix in personal stacks (DEV_SCOPE, CONTRACT §6)"
+  description = "Empty in the team stack; the name prefix in personal stacks (DEV_SCOPE, CONTRACT §6). When set, the CreateTags permission also requires guardian:dev-scope = this value"
   type        = string
 }
 

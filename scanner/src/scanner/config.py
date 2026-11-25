@@ -42,6 +42,16 @@ def max_restarts():
     return _int_env(env, default)
 
 
+def dry_run():
+    """DRY_RUN (CONTRACT §6): a dry run unless the value is exactly "false" (case-insensitive, stripped).
+    Same rule as common/timeline.py and the remediation Lambda; missing or any other value = dry run."""
+    return os.environ.get("DRY_RUN", "true").strip().lower() != "false"
+
+
+def table_volume_attachments():
+    return os.environ["TABLE_VOLUME_ATTACHMENTS"]
+
+
 def dev_scope():
     return os.environ.get("DEV_SCOPE", "").strip()
 

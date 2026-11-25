@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.18 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.19 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -54,7 +54,7 @@ Attributes:
 | `resourceType` | S | scanner | §2 |
 | `region` | S | scanner | e.g. `us-east-1` |
 | `owner` | S | scanner | email, or absent if unknown |
-| `ownerSource` | S | scanner | `tag` \| `copied` \| `cloudtrail` \| `unknown` |
+| `ownerSource` | S | scanner | `tag` \| `copied` \| `cloudtrail` \| `unknown`; `copied` only in the scan that copies the tags; later scans see the tag and write `tag` |
 | `project` | S | scanner | absent if unknown |
 | `name` | S | scanner | the resource's `Name` tag, if any (untrusted text) |
 | `status` | S | see §3.2 | `open` \| `in_progress` \| `remediated` \| `resolved` \| `failed` |
@@ -144,7 +144,7 @@ Who writes each event:
 
 | Writer | `actor` | Events |
 |---|---|---|
-| scanner | `scanner` | `finding_opened` (every new finding, all types incl. `MISSING_TAGS`), `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found` |
+| scanner | `scanner` | `finding_opened` (every new finding, all types incl. `MISSING_TAGS`), `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found`. `tags_copied`: Written only for a real copy (DRY_RUN=false), once per resource: details {tags, fromInstance}; result ok \| error. In dry-run the scanner only logs. |
 | `common/timeline.py` | the caller (`scanner` / `action-link`) | `timeline_started` (result `started` / `adopted` only; `generation` = the new one), `timeline_stopped` |
 | notify | `notify` | `notice_sent`, `final_warning_sent`, `email_fallback` |
 | remediation | `remediation` | `instance_stopped` (also a dry-run stop; not when someone else had stopped it), `snapshot_created`, `volume_deleted` |
@@ -179,8 +179,8 @@ Which finding each action points to, and when it expires:
 | `restore` | the **`EBS_UNATTACHED`** finding of the deleted volume (not the `SNAPSHOT_REMINDER`) | `remediated` with `dryRun = false` | `RESTORE_LINK_DAYS` (30) days after the confirmation email |
 
 Restore safety: before creating a volume, the Action Lambda checks that the finding's `snapshotId` still exists and is
-tagged `guardian:source-volume=<resourceId>`. If not, it refuses with a clear page ("the snapshot was deleted") and
-writes a `link_refused` audit entry. (The IAM condition in design §16 enforces the tag too.)
+tagged `guardian:source-volume=<resourceId>`. If not, it refuses with a clear page ("the snapshot was deleted"); a
+`link_refused` audit entry is written for POST only (§4.6). (The IAM condition in design §16 enforces the tag too.)
 
 Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>`. Only the hash is stored.
 
@@ -189,7 +189,7 @@ Raw token: `secrets.token_urlsafe(32)`. Link: `<ACTION_API_URL>/action?t=<token>
 | Table | Key | Attributes | Writer → reader |
 |---|---|---|---|
 | `<prefix>creator-lookups` | `resourceId` | `region`, `creatorArn`, `email` (or absent), `result` (`found`/`unknown`), `method` (`RunInstances`/`AllocateAddress`/`CreateVolume`/`last-attached`/`Attach`/`Detach`), `lookedUpAt` | scanner → scanner |
-| `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt` | scanner → scanner |
+| `<prefix>volume-attachments` | `volumeId` | `instanceId`, `region`, `seenAt`. One row per in-scope volume seen `in-use` on a scan, overwritten every scan, never deleted (the last known instance stays after the volume is orphaned); no TTL. | scanner → scanner |
 | `<prefix>daily-summaries` | `day` | `totalMonthlyWaste`, `realizedMonthlySavings`, `potentialMonthlySavings`, `countsByType` (M), `wasteByRegion` (M), `wasteByOwner` (M), `wasteByProject` (M), `openFindings`, `warningsSent`, `actionsTaken`, `actionsTakenDryRun`, `createdAt`, `sample` (BOOL, seed rows only) | daily-summary → dashboard, digest |
 | `<prefix>bill-history` | `day` + `key` (`service#<name>` \| `project#<name>` \| `project#untagged` \| `total`) | `amount` (N, USD **per day**, rounded to **4** decimals: an exception to §2's 2-decimal monthly money, since daily amounts are fractions of a cent), `estimated` (BOOL, Cost Explorer's `Estimated`), `fetchedAt` | daily-cost → dashboard, digest |
 | `<prefix>budget-alerts` | `budgetName` + `receivedAt` | `thresholdType` (`ACTUAL`/`FORECASTED`), `threshold`, `message`, `day` | budget-subscriber → dashboard, digest |
@@ -371,7 +371,7 @@ to and including yesterday and overwrites their rows (Cost Explorer revises rece
 |---|---|---|
 | `NAME_PREFIX` | all | `cg-dev-` |
 | `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-dev-findings` |
-| `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying) | `true` |
+| `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying: dry-run = log only) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
 | `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed |
 | `DETECTION_WINDOW_MINUTES` | scanner, engine (remediation `CHECK_EC2`) | `30` (demo) / `1440` |
@@ -483,3 +483,5 @@ budget amounts.
   rule; §4.3 CHECK_EBS returns sizeGb / availabilityZone; §6 RESTORE_LINK_DAYS is a workflow constant (#30).
 - v2.17 — §3.1 availabilityZone on remediated EBS findings; §4.6 action link flow (transaction claim, token give-back, protect / postpone in dry-run, restore details, refusal codes, link_refused on POST only); §5 guardian:restored-from (#31).
 - v2.18 — §3.2 automatic restarts by the scanner and the manual reset; §6 MAX_RESTARTS also used by the scanner; §8 workflow alarms (#32).
+- v2.19 — §3.1 / §3.3 / §3.5 / §6 tag copying (owner / project from the instance to attached volumes and
+  associated Elastic IPs, dry-run = log only) and volume-attachments records (#33).

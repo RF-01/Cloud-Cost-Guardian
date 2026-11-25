@@ -1,7 +1,10 @@
 # Scanner Lambda (lane B, design §8). Invoked by the scan schedule (platform, task later) or by hand with
 # {"source": "schedule", "job": "scan"} (CONTRACT §4.7).
 
+data "aws_caller_identity" "current" {}
+
 locals {
+  account_id   = data.aws_caller_identity.current.account_id
   repo_root    = "${path.module}/../.."
   scanner_src  = "${local.repo_root}/scanner/src/scanner"
   common_src   = "${local.repo_root}/common"
@@ -101,6 +104,37 @@ data "aws_iam_policy_document" "scanner" {
     resources = [var.table_arns["audit"]]
   }
 
+  # Volume-attachments records (CONTRACT §3.5, task #33): one PutItem per in-use volume per scan.
+  statement {
+    sid       = "AttachmentRecords"
+    actions   = ["dynamodb:PutItem"]
+    resources = [var.table_arns["volume_attachments"]]
+  }
+
+  # Tag copying (design §8.6, task #33): only owner / project, only on volumes and Elastic IPs of this account.
+  # In a personal stack only on resources tagged guardian:dev-scope = DEV_SCOPE (CONTRACT §6).
+  statement {
+    sid     = "CopyOwnerProjectTags"
+    actions = ["ec2:CreateTags"]
+    resources = [
+      "arn:aws:ec2:*:${local.account_id}:volume/*",
+      "arn:aws:ec2:*:${local.account_id}:elastic-ip/*",
+    ]
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = ["owner", "project"]
+    }
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
+  }
+
   # common/timeline.py: only when the engine's state machines exist.
   dynamic "statement" {
     for_each = length(local.sfn_arns) > 0 ? [1] : []
@@ -142,6 +176,7 @@ resource "aws_lambda_function" "scanner" {
       NAME_PREFIX                 = var.name_prefix
       TABLE_FINDINGS              = var.table_names["findings"]
       TABLE_AUDIT                 = var.table_names["audit"]
+      TABLE_VOLUME_ATTACHMENTS    = var.table_names["volume_attachments"]
       DRY_RUN                     = tostring(var.dry_run)
       SCAN_REGIONS                = var.scan_regions
       DEV_SCOPE                   = var.dev_scope

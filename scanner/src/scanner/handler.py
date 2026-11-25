@@ -5,8 +5,10 @@ DescribeRegions (called in us-west-2; falls back to us-west-2 alone if that call
 regions. Regions run in parallel threads (SCAN_MAX_WORKERS, default 8); `scan_region` is the per-region unit and
 one failing region never stops the others. Each thread has its own boto3 session (scanner/clients.py), and every
 client is bounded by timeouts and retries so one slow region can't eat the 5-minute timeout (design §17).
-Not yet here: tag copying (#33), CloudTrail lookup (#34), resolve / reopen (#35), emails (#36). Cost estimates
-come from the internal price table (pricing.py, #21).
+Before the detection rules, each region records volume attachments and copies missing owner / project tags from
+instances to attached volumes and associated Elastic IPs (design §8.6, task #33; DRY_RUN = log only), so the
+missing-tag check sees the copied tags. Not yet here: CloudTrail lookup (#34), resolve / reopen (#35), emails (#36).
+Cost estimates come from the internal price table (pricing.py, #21).
 """
 
 import json
@@ -17,10 +19,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from common import audit, idle, timeline
-from scanner import clients, config, findings, pricing
+from scanner import attachments, clients, config, findings, pricing
 
 TIMELINE_TYPES = ("EC2_IDLE", "EBS_UNATTACHED")
 REQUIRED_TAGS = ("owner", "project")
+COPIED_TAGS = ("owner", "project")  # the only keys ever copied from an instance (never Name, never guardian:*)
 # "User initiated (2026-11-20 10:15:00 GMT)" (AWS); moto writes "UTC".
 STOP_TIME = re.compile(r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:GMT|UTC)\)")
 
@@ -79,6 +82,16 @@ class _Scan:
         self.timelines = Counter()
         self.skipped = 0
         self.report_only = Counter()
+        self.tag_copy = Counter()
+        self.attachment_records = Counter()
+        self.owner_copied = set()  # resource IDs whose owner tag was copied on this scan (ownerSource "copied")
+
+    def attrs(self, resource_id, resource_type, tags):
+        """The scanner attributes of a resource for this scan (CONTRACT §3.1)."""
+        attrs = _base_attrs(resource_type, self.region, tags)
+        if resource_id in self.owner_copied and attrs["owner"]:
+            attrs["ownerSource"] = "copied"
+        return attrs
 
     def record(self, resource_id, finding_type, attrs, report_only=None):
         is_new, item = findings.upsert(resource_id, finding_type, attrs, self.now_iso)
@@ -185,7 +198,7 @@ def _scan_instances(scan, ec2, cloudwatch, instances, scope):
             scan.skipped += 1
             continue
         iid = inst["InstanceId"]
-        attrs = _base_attrs("ec2", scan.region, tags)
+        attrs = scan.attrs(iid, "ec2", tags)
         scan.missing_tags(iid, "ec2", tags, attrs)
 
         if inst["State"]["Name"] != "running" or inst["LaunchTime"] > start:
@@ -201,34 +214,40 @@ def _scan_instances(scan, ec2, cloudwatch, instances, scope):
                     report_only=_report_only_reason(tags))
 
 
-def _scan_volumes(scan, ec2, scope):
+def _all_volumes(ec2):
+    out = []
     for page in ec2.get_paginator("describe_volumes").paginate():
-        for vol in page["Volumes"]:
-            tags = _tags(vol)
-            if not _in_scope(tags, scope):
-                scan.skipped += 1
-                continue
-            vid = vol["VolumeId"]
-            attrs = _base_attrs("ebs", scan.region, tags)
-            scan.missing_tags(vid, "ebs", tags, attrs)
-            if vol["State"] == "available":
-                scan.record(vid, "EBS_UNATTACHED",
-                            dict(attrs, estimatedMonthlyCost=pricing.estimate("ebs", scan.region, vol),
-                                 estimatedSnapshotMonthlyCost=pricing.estimate_snapshot(
-                                     scan.region, vol.get("Size"), resource_id=vid)),
-                            report_only=_report_only_reason(tags))
+        out.extend(page["Volumes"])
+    return out
 
 
-def _scan_addresses(scan, ec2, instances, scope):
+def _scan_volumes(scan, volumes, scope):
+    for vol in volumes:
+        tags = _tags(vol)
+        if not _in_scope(tags, scope):
+            scan.skipped += 1
+            continue
+        vid = vol["VolumeId"]
+        attrs = scan.attrs(vid, "ebs", tags)
+        scan.missing_tags(vid, "ebs", tags, attrs)
+        if vol["State"] == "available":
+            scan.record(vid, "EBS_UNATTACHED",
+                        dict(attrs, estimatedMonthlyCost=pricing.estimate("ebs", scan.region, vol),
+                             estimatedSnapshotMonthlyCost=pricing.estimate_snapshot(
+                                 scan.region, vol.get("Size"), resource_id=vid)),
+                        report_only=_report_only_reason(tags))
+
+
+def _scan_addresses(scan, addresses, instances, scope):
     by_id = {i["InstanceId"]: i for i in instances}
     threshold = timedelta(hours=config.eip_stopped_threshold_hours())
-    for addr in ec2.describe_addresses()["Addresses"]:
+    for addr in addresses:
         tags = _tags(addr)
         if not _in_scope(tags, scope):
             scan.skipped += 1
             continue
         aid = addr.get("AllocationId") or addr["PublicIp"]
-        attrs = _base_attrs("eip", scan.region, tags)
+        attrs = scan.attrs(aid, "eip", tags)
         scan.missing_tags(aid, "eip", tags, attrs)
         cost = pricing.estimate("eip", scan.region, addr)
         if not addr.get("AssociationId"):
@@ -246,6 +265,100 @@ def _scan_addresses(scan, ec2, instances, scope):
             scan.record(aid, "EIP_ON_STOPPED_INSTANCE", dict(attrs, estimatedMonthlyCost=cost))
 
 
+# ---------------------------------------------------------------- attachments and tag copying (design §8.6, #33)
+
+
+def _attached_instance_id(volume):
+    if volume.get("State") != "in-use":
+        return None
+    for attachment in volume.get("Attachments") or []:
+        if attachment.get("InstanceId"):
+            return attachment["InstanceId"]
+    return None
+
+
+def _record_attachments(scan, volumes, scope):
+    """CONTRACT §3.5: one volume-attachments row per in-scope in-use volume, overwritten every scan."""
+    for vol in volumes:
+        iid = _attached_instance_id(vol)
+        if iid is None or not _in_scope(_tags(vol), scope):
+            continue
+        try:
+            attachments.put(vol["VolumeId"], iid, scan.region, scan.now_iso)
+            scan.attachment_records["written"] += 1
+        except Exception as err:  # never stops the scan
+            scan.attachment_records["error"] += 1
+            findings.log(vol["VolumeId"], "*", "volume_attachment", "error", instanceId=iid, error=str(err))
+
+
+def _blank(tags, key):
+    return not (tags.get(key) or "").strip()
+
+
+def _copy_from_instance(scan, ec2, resource, resource_id, instance_id, by_id, dry_run):
+    """Copy the owner / project tags the resource lacks from its instance. Updates resource["Tags"] in place
+    only after a real, successful copy, so the detection rules that follow see what is really there."""
+    tags = _tags(resource)
+    lacking = [k for k in COPIED_TAGS if _blank(tags, k)]
+    if not lacking:
+        return
+    inst = by_id.get(instance_id)
+    if inst is None:
+        scan.tag_copy["skipped"] += 1
+        findings.log(resource_id, "*", "copy_tags", "skipped: instance not found", instanceId=instance_id,
+                     missingTags=lacking)
+        return
+    inst_tags = _tags(inst)
+    to_copy = {k: inst_tags[k] for k in lacking if not _blank(inst_tags, k)}  # value exactly as on the instance
+    if not to_copy:
+        return
+    if dry_run:
+        scan.tag_copy["would_copy"] += 1
+        findings.log(resource_id, "*", "copy_tags", "dry-run: would copy", tags=to_copy, fromInstance=instance_id)
+        return
+    try:
+        ec2.create_tags(Resources=[resource_id], Tags=[{"Key": k, "Value": v} for k, v in to_copy.items()])
+    except Exception as err:  # keep the tags unchanged; the missing-tag check reports them
+        error = f"{type(err).__name__}: {err}"[:300]
+        scan.tag_copy["error"] += 1
+        findings.log(resource_id, "*", "copy_tags", "error", tags=to_copy, fromInstance=instance_id, error=error)
+        audit.write_audit(resource_id, "scanner", "tags_copied", region=scan.region, dry_run=False,
+                          result="error", details={"error": error})
+        return
+    kept = [t for t in resource.get("Tags") or [] if t["Key"] not in to_copy]  # drops blank values being replaced
+    resource["Tags"] = kept + [{"Key": k, "Value": v} for k, v in to_copy.items()]
+    if "owner" in to_copy:
+        scan.owner_copied.add(resource_id)
+    scan.tag_copy["copied"] += 1
+    findings.log(resource_id, "*", "copy_tags", "copied", tags=to_copy, fromInstance=instance_id)
+    audit.write_audit(resource_id, "scanner", "tags_copied", region=scan.region, dry_run=False, result="ok",
+                      details={"tags": to_copy, "fromInstance": instance_id})
+
+
+def _copy_tags(scan, ec2, instances, volumes, addresses, scope):
+    """design §8.6 step 1: attached volumes and associated Elastic IPs get missing owner / project tags from their
+    instance. Only in-scope resources; DRY_RUN = log only (CONTRACT §6)."""
+    by_id = {i["InstanceId"]: i for i in instances}
+    dry_run = config.dry_run()
+    for vol in volumes:
+        iid = _attached_instance_id(vol)
+        if iid is not None and _in_scope(_tags(vol), scope):
+            _copy_from_instance(scan, ec2, vol, vol["VolumeId"], iid, by_id, dry_run)
+    for addr in addresses:
+        if not addr.get("AssociationId") or not _in_scope(_tags(addr), scope):
+            continue  # unassociated: nothing to copy from
+        tags = _tags(addr)
+        if not addr.get("InstanceId") or not addr.get("AllocationId"):
+            # NAT gateway / network interface (or an EC2-Classic address, which can't be tagged).
+            if any(_blank(tags, k) for k in COPIED_TAGS):
+                scan.tag_copy["skipped"] += 1
+                findings.log(addr.get("AllocationId") or addr.get("PublicIp"), "*", "copy_tags",
+                             "skipped: not associated with an instance",
+                             networkInterfaceId=addr.get("NetworkInterfaceId"))
+            continue
+        _copy_from_instance(scan, ec2, addr, addr["AllocationId"], addr["InstanceId"], by_id, dry_run)
+
+
 def scan_region(region, now=None):
     """Run every detection rule in one region. Returns that region's summary."""
     scan = _Scan(region, now or datetime.now(timezone.utc))
@@ -254,9 +367,13 @@ def scan_region(region, now=None):
     cloudwatch = clients.client("cloudwatch", region)
 
     instances = _all_instances(ec2)
+    volumes = _all_volumes(ec2)  # described once, used by every step below
+    addresses = ec2.describe_addresses()["Addresses"]
+    _record_attachments(scan, volumes, scope)
+    _copy_tags(scan, ec2, instances, volumes, addresses, scope)  # before the rules: they must see copied tags
     _scan_instances(scan, ec2, cloudwatch, instances, scope)
-    _scan_volumes(scan, ec2, scope)
-    _scan_addresses(scan, ec2, instances, scope)
+    _scan_volumes(scan, volumes, scope)
+    _scan_addresses(scan, addresses, instances, scope)
 
     if scope:
         findings.log(region, "*", "dev_scope_filter", "skipped", skipped=scan.skipped, devScope=scope)
@@ -266,6 +383,8 @@ def scan_region(region, now=None):
         "timelines": dict(scan.timelines),
         "skippedOutOfScope": scan.skipped,
         "reportOnly": dict(scan.report_only),
+        "tagCopy": dict(scan.tag_copy),
+        "attachmentRecords": dict(scan.attachment_records),
     }
 
 
@@ -308,7 +427,7 @@ def _collect(future):
 
 
 def _merge(totals, summary):
-    for key in ("findings", "timelines", "reportOnly"):
+    for key in ("findings", "timelines", "reportOnly", "tagCopy", "attachmentRecords"):
         totals[key].update(summary.get(key) or {})
     totals["skippedOutOfScope"] += summary.get("skippedOutOfScope") or 0
 
@@ -326,7 +445,8 @@ def handler(event, context):
         results = {region: _collect(future) for region, future in futures.items()}
 
     per_region, scanned, failed = {}, [], {}
-    totals = {"findings": Counter(), "timelines": Counter(), "reportOnly": Counter(), "skippedOutOfScope": 0}
+    totals = {"findings": Counter(), "timelines": Counter(), "reportOnly": Counter(), "tagCopy": Counter(),
+              "attachmentRecords": Counter(), "skippedOutOfScope": 0}
     for region in regions:
         (summary, err), seconds = results[region], durations.get(region, 0.0)
         if err is None:

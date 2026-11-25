@@ -8,11 +8,12 @@ import pytest
 from moto import mock_aws
 
 from common import audit, idle, timeline
-from scanner import config, findings, handler
+from scanner import attachments, config, findings, handler
 
 REGION = "us-west-2"
 TABLE = "cg-test-findings"
 AUDIT_TABLE = "cg-test-audit"
+ATTACH_TABLE = "cg-test-volume-attachments"
 SCOPE = "cg-dev-"
 OWNED = {"owner": "Alice@Example.com", "project": "demo", "Name": "web-1"}
 
@@ -28,6 +29,7 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_REGION", REGION)
     monkeypatch.setenv("TABLE_FINDINGS", TABLE)
     monkeypatch.setenv("TABLE_AUDIT", AUDIT_TABLE)
+    monkeypatch.setenv("TABLE_VOLUME_ATTACHMENTS", ATTACH_TABLE)
     monkeypatch.setenv("SCAN_REGIONS", REGION)
     monkeypatch.setenv("DRY_RUN", "true")
     with mock_aws():
@@ -40,16 +42,23 @@ def aws(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         audit_table = create_audit_table()
+        attach_table = boto3.resource("dynamodb", region_name=REGION).create_table(
+            TableName=ATTACH_TABLE, KeySchema=[{"AttributeName": "volumeId", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "volumeId", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
         findings.reset_clients()
         timeline.reset_clients()
         audit.reset_clients()
+        attachments.reset_clients()
         ec2 = boto3.client("ec2", region_name=REGION)
         yield {"table": table, "ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION),
-               "audit": audit_table,
+               "audit": audit_table, "attachments": attach_table,
                "ami": ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]}
         findings.reset_clients()
         timeline.reset_clients()
         audit.reset_clients()
+        attachments.reset_clients()
 
 
 def create_audit_table():
@@ -620,7 +629,8 @@ def stub_scan(monkeypatch, fail=()):
         if region in fail:
             raise RuntimeError(f"boom in {region}")
         return {"region": region, "findings": {"EBS_UNATTACHED": 1}, "timelines": {"started": 1},
-                "skippedOutOfScope": 2, "reportOnly": {}}
+                "skippedOutOfScope": 2, "reportOnly": {}, "tagCopy": {"copied": 1, "would_copy": 2},
+                "attachmentRecords": {"written": 3}}
 
     monkeypatch.setattr(handler, "scan_region", fake)
     return seen
@@ -711,7 +721,8 @@ def test_one_failing_region_does_not_stop_the_others(aws, monkeypatch, capsys):
     assert summary["regions"]["eu-west-1"]["status"] == "error"
     assert summary["regions"]["us-west-2"]["status"] == "ok"
     assert summary["totals"] == {"findings": {"EBS_UNATTACHED": 2}, "timelines": {"started": 2},
-                                 "reportOnly": {}, "skippedOutOfScope": 4}
+                                 "reportOnly": {}, "tagCopy": {"copied": 2, "would_copy": 4},
+                                 "attachmentRecords": {"written": 6}, "skippedOutOfScope": 4}
     assert summary["slowestRegion"]["region"] in seen and summary["durationSeconds"] >= 0
     entries = logs(capsys)
     assert any(e["action"] == "scan_region" and e["region"] == "eu-west-1" and e["errorType"] == "RuntimeError"
@@ -955,3 +966,249 @@ def test_restart_counters_in_scan_summary_log(aws, monkeypatch, capsys):
     assert out["totals"]["timelines"] == {"restart_started": 1, "restart_limit": 1}
     scan_line = [e for e in logs(capsys) if e["action"] == "scan"][-1]
     assert scan_line["totals"]["timelines"] == {"restart_started": 1, "restart_limit": 1}
+
+
+# ---------------------------------------------------------------- tag copying + volume attachments (#33)
+
+
+INSTANCE_TAGS = {"owner": "Alice@Example.com", "project": "demo", "Name": "web-1",
+                 "guardian:dev-scope": "cg-dev-"}
+
+
+def tags_of(aws, rid):
+    out = aws["ec2"].describe_tags(Filters=[{"Name": "resource-id", "Values": [rid]}])["Tags"]
+    return {t["Key"]: t["Value"] for t in out}
+
+
+def tag_audits(aws, rid):
+    return [e for e in audit_entries(aws, rid) if e["event"] == "tags_copied"]
+
+
+def attachment(aws, vid):
+    return aws["attachments"].get_item(Key={"volumeId": vid}).get("Item")
+
+
+def attached_volume(aws, iid, tags=None):
+    spec = {"TagSpecifications": [{"ResourceType": "volume", "Tags": tag_list(tags)}]} if tags else {}
+    vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8, **spec)["VolumeId"]
+    aws["ec2"].attach_volume(VolumeId=vol, InstanceId=iid, Device="/dev/sdf")
+    return vol
+
+
+@pytest.fixture
+def real(monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "false")
+
+
+def test_attached_volume_copies_owner_and_project(aws, real, capsys):
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"Name": "root"})
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+
+    tags = tags_of(aws, vol)
+    assert tags["owner"] == "Alice@Example.com" and tags["project"] == "demo"  # exactly as on the instance
+    assert tags["Name"] == "root" and "guardian:dev-scope" not in tags  # never Name or guardian:*
+    assert get(aws, vol, "MISSING_TAGS") is None
+    (entry,) = tag_audits(aws, vol)
+    assert (entry["actor"], entry["region"], entry["result"], entry["dryRun"]) == ("scanner", REGION, "ok", False)
+    assert "findingType" not in entry
+    assert entry["details"] == {"tags": {"owner": "Alice@Example.com", "project": "demo"}, "fromInstance": iid}
+    assert summary["tagCopy"] == {"copied": 1}
+    assert any(e["resourceId"] == vol and e["action"] == "copy_tags" and e["result"] == "copied"
+               for e in logs(capsys))
+
+
+def test_only_the_missing_key_is_copied(aws, real):
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"owner": "bob@example.com", "project": "  "})
+    vol = root_volume(aws, iid)
+    handler.scan_region(REGION, now=later())
+    tags = tags_of(aws, vol)
+    assert tags["owner"] == "bob@example.com"  # never overwritten
+    assert tags["project"] == "demo"  # blank after strip counts as missing
+    assert tag_audits(aws, vol)[0]["details"]["tags"] == {"project": "demo"}
+    assert get(aws, vol, "MISSING_TAGS") is None
+
+
+def test_existing_different_owner_never_overwritten(aws, real):
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"owner": "bob@example.com", "project": "other"})
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+    assert tags_of(aws, vol) == {"owner": "bob@example.com", "project": "other"}
+    assert tag_audits(aws, vol) == [] and summary["tagCopy"] == {}
+
+
+def test_instance_without_tags_copies_nothing(aws, real, capsys):
+    iid = launch(aws)
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+    assert tags_of(aws, vol) == {}
+    assert get(aws, vol, "MISSING_TAGS")["missingTags"] == ["owner", "project"]
+    assert summary["tagCopy"] == {}
+    assert not [e for e in logs(capsys) if e["action"] == "copy_tags"]  # nothing to copy: no log line
+
+
+def test_eip_associated_with_instance_copies(aws, real):
+    iid = launch(aws, INSTANCE_TAGS)
+    aid = aws["ec2"].allocate_address(Domain="vpc")["AllocationId"]
+    aws["ec2"].associate_address(AllocationId=aid, InstanceId=iid)
+    summary = handler.scan_region(REGION, now=later())
+    assert tags_of(aws, aid) == {"owner": "Alice@Example.com", "project": "demo"}
+    assert get(aws, aid, "MISSING_TAGS") is None
+    assert tag_audits(aws, aid)[0]["details"]["fromInstance"] == iid
+    assert summary["tagCopy"] == {"copied": 1}
+
+
+def test_eip_without_instance_id_is_skipped(aws, real, capsys):
+    # NAT gateway / network interface association: no InstanceId to copy from.
+    scan = handler._Scan(REGION, later())
+    addr = {"AllocationId": "eipalloc-0nat", "AssociationId": "eipassoc-0nat", "NetworkInterfaceId": "eni-0nat",
+            "PublicIp": "198.51.100.7"}
+    ec2 = handler.clients.client("ec2", REGION)
+    handler._copy_tags(scan, ec2, [], [], [addr], "")
+    assert scan.tag_copy == {"skipped": 1}
+    (line,) = [e for e in logs(capsys) if e["action"] == "copy_tags"]
+    assert line["resourceId"] == "eipalloc-0nat" and line["result"].startswith("skipped")
+    assert tag_audits(aws, "eipalloc-0nat") == []
+
+
+@pytest.mark.parametrize("value", [None, "", "true", "TRUE", "yes"])
+def test_dry_run_only_logs(aws, monkeypatch, capsys, value):
+    if value is None:
+        monkeypatch.delenv("DRY_RUN", raising=False)
+    else:
+        monkeypatch.setenv("DRY_RUN", value)
+    assert config.dry_run() is True
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"Name": "root"})
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+
+    assert tags_of(aws, vol) == {"Name": "root"}  # no CreateTags
+    assert tag_audits(aws, vol) == []
+    item = get(aws, vol, "MISSING_TAGS")
+    assert item["missingTags"] == ["owner", "project"] and item["ownerSource"] == "unknown"
+    (line,) = [e for e in logs(capsys) if e["action"] == "copy_tags"]
+    assert line == {"resourceId": vol, "findingType": "*", "action": "copy_tags", "result": "dry-run: would copy",
+                    "tags": {"owner": "Alice@Example.com", "project": "demo"}, "fromInstance": iid}
+    assert summary["tagCopy"] == {"would_copy": 1}
+
+
+@pytest.mark.parametrize("value", ["false", " False "])
+def test_dry_run_false_reader(monkeypatch, value):
+    monkeypatch.setenv("DRY_RUN", value)
+    assert config.dry_run() is False
+
+
+def test_out_of_scope_volume_gets_no_copy_and_no_record(aws, real, monkeypatch):
+    monkeypatch.setenv("DEV_SCOPE", SCOPE)
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"Name": "not-mine"})  # volume lacks guardian:dev-scope
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+    assert tags_of(aws, vol) == {"Name": "not-mine"}
+    assert attachment(aws, vol) is None
+    assert summary["tagCopy"] == {} and summary["attachmentRecords"] == {}
+
+
+def test_in_scope_volume_is_copied_and_recorded(aws, real, monkeypatch):
+    monkeypatch.setenv("DEV_SCOPE", SCOPE)
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"guardian:dev-scope": SCOPE})
+    vol = root_volume(aws, iid)
+    summary = handler.scan_region(REGION, now=later())
+    assert tags_of(aws, vol)["owner"] == "Alice@Example.com"
+    assert attachment(aws, vol)["instanceId"] == iid
+    assert summary["tagCopy"] == {"copied": 1} and summary["attachmentRecords"] == {"written": 1}
+
+
+def test_attachment_records_written_overwritten_and_kept(aws):
+    iid = launch(aws, OWNED)
+    vol = attached_volume(aws, iid, OWNED)
+    loose = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
+    first = later(1)
+    summary = handler.scan_region(REGION, now=first)
+    row = attachment(aws, vol)
+    assert row == {"volumeId": vol, "instanceId": iid, "region": REGION,
+                   "seenAt": first.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    assert attachment(aws, root_volume(aws, iid))["instanceId"] == iid
+    assert attachment(aws, loose) is None  # never attached: no record
+    assert summary["attachmentRecords"] == {"written": 2}
+
+    second = later(2)
+    handler.scan_region(REGION, now=second)
+    assert attachment(aws, vol)["seenAt"] == second.strftime("%Y-%m-%dT%H:%M:%SZ")  # overwritten
+
+    aws["ec2"].detach_volume(VolumeId=vol, InstanceId=iid, Device="/dev/sdf")
+    summary = handler.scan_region(REGION, now=later(3))
+    kept = attachment(aws, vol)
+    assert kept["instanceId"] == iid and kept["seenAt"] == second.strftime("%Y-%m-%dT%H:%M:%SZ")  # not deleted
+    assert summary["attachmentRecords"] == {"written": 1}  # only the root volume now
+    assert get(aws, vol, "EBS_UNATTACHED")["status"] == "open"
+
+
+class _FailingCreateTags:
+    def __init__(self, client):
+        self._client = client
+
+    def create_tags(self, **kwargs):
+        raise RuntimeError("AccessDenied: not allowed")
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+def test_create_tags_failure_is_logged_audited_and_scan_continues(aws, real, monkeypatch, capsys):
+    original = handler.clients.client
+    monkeypatch.setattr(handler.clients, "client",
+                        lambda service, region: _FailingCreateTags(original(service, region))
+                        if service == "ec2" else original(service, region))
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"Name": "root"})
+    vol = root_volume(aws, iid)
+    other = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
+    summary = handler.scan_region(REGION, now=later())
+
+    assert tags_of(aws, vol) == {"Name": "root"}
+    (entry,) = tag_audits(aws, vol)
+    assert entry["result"] == "error" and "AccessDenied" in entry["details"]["error"]
+    assert get(aws, vol, "MISSING_TAGS")["missingTags"] == ["owner", "project"]  # tags unchanged in memory
+    assert get(aws, other, "EBS_UNATTACHED") is not None  # scan went on
+    assert summary["tagCopy"] == {"error": 1}
+    assert any(e["resourceId"] == vol and e["action"] == "copy_tags" and e["result"] == "error"
+               for e in logs(capsys))
+
+
+def test_put_item_failure_does_not_stop_the_scan(aws, monkeypatch, capsys):
+    def boom(*a):
+        raise RuntimeError("throttled")
+
+    monkeypatch.setattr(attachments, "put", boom)
+    iid = launch(aws, OWNED)
+    loose = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
+    summary = handler.scan_region(REGION, now=later())
+    assert summary["attachmentRecords"] == {"error": 1}
+    assert get(aws, loose, "EBS_UNATTACHED") is not None
+    assert any(e["action"] == "volume_attachment" and e["result"] == "error"
+               and e["resourceId"] == root_volume(aws, iid) for e in logs(capsys))
+
+
+def test_owner_source_copied_only_in_the_copying_scan(aws, real):
+    # The instance has an owner but no project: owner is copied, MISSING_TAGS (project) stays.
+    iid = launch(aws, {"owner": "carol@example.com"}, volume_tags={"Name": "root"})
+    vol = root_volume(aws, iid)
+    handler.scan_region(REGION, now=later(1))
+    item = get(aws, vol, "MISSING_TAGS")
+    assert item["missingTags"] == ["project"]
+    assert (item["owner"], item["ownerSource"]) == ("carol@example.com", "copied")
+
+    handler.scan_region(REGION, now=later(2))
+    item = get(aws, vol, "MISSING_TAGS")
+    assert (item["owner"], item["ownerSource"]) == ("carol@example.com", "tag")
+    assert len(tag_audits(aws, vol)) == 1  # nothing left to copy on the second scan
+
+
+def test_tag_copy_and_attachment_counters_in_totals(aws, real, capsys):
+    iid = launch(aws, INSTANCE_TAGS, volume_tags={"Name": "root"})
+    attached_volume(aws, iid, {"owner": "x@example.com", "project": "p"})
+    out = handler.handler({}, None)
+    assert out["totals"]["tagCopy"] == {"copied": 1}
+    assert out["totals"]["attachmentRecords"] == {"written": 2}
+    scan_line = [e for e in logs(capsys) if e["action"] == "scan"][-1]
+    assert scan_line["totals"]["tagCopy"] == {"copied": 1}
+    assert scan_line["regions"][REGION]["attachmentRecords"] == {"written": 2}
