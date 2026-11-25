@@ -83,16 +83,33 @@ data "aws_iam_policy_document" "remediation" {
     resources = ["*"]
   }
 
+  # In a personal stack only on resources tagged guardian:dev-scope = DEV_SCOPE (CONTRACT §6); the code checks too.
   statement {
     sid       = "StopInstances"
     actions   = ["ec2:StopInstances"]
     resources = ["arn:aws:ec2:*:${local.account_id}:instance/*"]
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
   }
 
   statement {
     sid       = "DeleteVolumes"
     actions   = ["ec2:DeleteVolume"]
     resources = ["arn:aws:ec2:*:${local.account_id}:volume/*"]
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
   }
 
   # IAM, not only code: never stop or delete anything tagged guardian:protect=true (any letter case,
@@ -116,14 +133,34 @@ data "aws_iam_policy_document" "remediation" {
     resources = [var.table_arns["audit"]]
   }
 
-  # CreateSnapshot is authorized on both the source volume and the new snapshot.
+  # CreateSnapshot is authorized on both the source volume and the new snapshot. In a personal stack the volume
+  # must carry the dev-scope tag, and so must the new snapshot (the handler copies the volume's tags at creation).
   statement {
-    sid     = "CreateSnapshots"
-    actions = ["ec2:CreateSnapshot"]
-    resources = [
-      "arn:aws:ec2:*:${local.account_id}:volume/*",
-      "arn:aws:ec2:*::snapshot/*",
-    ]
+    sid       = "CreateSnapshotOfVolume"
+    actions   = ["ec2:CreateSnapshot"]
+    resources = ["arn:aws:ec2:*:${local.account_id}:volume/*"]
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
+  }
+
+  statement {
+    sid       = "CreateSnapshotNew"
+    actions   = ["ec2:CreateSnapshot"]
+    resources = ["arn:aws:ec2:*::snapshot/*"]
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "aws:RequestTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
   }
 
   # Tags only on snapshots, and only as part of CreateSnapshot (tag-on-create).
@@ -135,6 +172,14 @@ data "aws_iam_policy_document" "remediation" {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
       values   = ["CreateSnapshot"]
+    }
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "aws:RequestTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
     }
   }
 }

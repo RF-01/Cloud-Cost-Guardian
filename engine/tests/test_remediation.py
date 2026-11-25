@@ -490,3 +490,52 @@ def test_audit_failure_does_not_fail_the_stop(aws, monkeypatch, capsys):
     iid = launch(aws)
     assert call("STOP_INSTANCE", iid)["stopped"] is True
     assert any(line["action"] == "audit_write_failed" for line in logs(capsys))
+
+
+# ---------------------------------------------------------------- IAM policy (engine/terraform/remediation.tf, #39)
+
+REMEDIATION_TF = ENGINE / "terraform" / "remediation.tf"
+
+
+def _remediation_statements():
+    import re
+    text = REMEDIATION_TF.read_text(encoding="utf-8")
+    block = text[text.index('data "aws_iam_policy_document" "remediation" {'):]
+    block = block[:block.index('resource "aws_iam_role_policy" "remediation"')]
+    out = {}
+    for chunk in block.split("statement {")[1:]:
+        flat = re.sub(r"\s+", " ", chunk)
+        out[re.search(r'sid = "([^"]+)"', flat).group(1)] = flat
+    return out
+
+
+def _dev_scope_key(flat):
+    import re
+    m = re.findall(r'dynamic "condition" \{ for_each = var\.dev_scope != "" \? \[var\.dev_scope\] : \[\] content \{ '
+                   r'test = "StringEquals" variable = "([^"]+)" values = \[condition\.value\]', flat)
+    return m
+
+
+@pytest.mark.parametrize("sid,key,resource", [
+    ("StopInstances", "ec2:ResourceTag/guardian:dev-scope", ":instance/*"),
+    ("DeleteVolumes", "ec2:ResourceTag/guardian:dev-scope", ":volume/*"),
+    ("CreateSnapshotOfVolume", "ec2:ResourceTag/guardian:dev-scope", ":volume/*"),
+    ("CreateSnapshotNew", "aws:RequestTag/guardian:dev-scope", "::snapshot/*"),
+    ("TagNewSnapshots", "aws:RequestTag/guardian:dev-scope", "::snapshot/*"),
+])
+def test_remediation_policy_dev_scope_in_iam(sid, key, resource):
+    statements = _remediation_statements()
+    assert _dev_scope_key(statements[sid]) == [key]
+    assert resource in statements[sid]
+
+
+def test_remediation_policy_protect_deny_unchanged_and_no_forbidden_actions():
+    statements = _remediation_statements()
+    assert "CreateSnapshots" not in statements  # split in two (#39)
+    deny = statements["DenyProtected"]
+    assert 'effect = "Deny"' in deny and 'actions = ["ec2:StopInstances", "ec2:DeleteVolume"]' in deny
+    assert 'resources = ["*"]' in deny and "dynamic" not in deny
+    assert ('test = "StringEqualsIgnoreCase" variable = "aws:ResourceTag/guardian:protect" values = ["true"]'
+            in deny)
+    for flat in statements.values():
+        assert "DeleteSnapshot" not in flat and "ReleaseAddress" not in flat and '"ec2:*"' not in flat

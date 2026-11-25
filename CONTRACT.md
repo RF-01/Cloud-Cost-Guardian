@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.23 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.24 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -450,7 +450,7 @@ For each record:
 | `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-dev-findings` |
 | `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying and the owner tag set after a creator lookup: dry-run = log only) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
-| `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed |
+| `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed; enforced in IAM for the scanner, remediation and action roles (code checks stay) |
 | `DETECTION_WINDOW_MINUTES` | scanner, engine (remediation `CHECK_EC2`) | `30` (demo) / `1440` |
 | `EC2_SFN_ARN`, `EBS_SFN_ARN` | `common/timeline.py` | |
 | `WAIT_BEFORE_FINAL_SECONDS_EC2`, `WAIT_BEFORE_ACTION_SECONDS_EC2`, same for `_EBS` | scanner, action (passed into workflow input) | `120` |
@@ -505,7 +505,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge, 
 - `origin_secret`, `dashboard_username` and `dashboard_password` are sensitive variables of `infra/stack`, passed to the modules that need them.
 - Notify's `ACTION_API_URL` comes from core's own API resource, so it never depends on engine.
 - No module-level `depends_on` between lane modules (it would create hidden cycles).
-- IAM roles for a Lambda live in the module that owns the Lambda; lane C reviews them.
+- IAM roles for a Lambda live in the module that owns the Lambda; lane C reviews them with `platform/tools/iam_review.py` (`docs/iam-review.md`).
 - Core owns the AWS Budgets (`<prefix>account-monthly`, `<prefix>project-<name>` filtered on `user:project$<name>`;
   usage before credits; ACTUAL > 80 %, ACTUAL > 100 %, FORECASTED > 100 % → `team_topic_arn`; no budget actions)
   and the budget subscriber. The schedules module owns the scheduler role (`<prefix>scheduler-role`), the
@@ -580,3 +580,4 @@ budget amounts (now infra/stack variables `account_budget_usd`, `project_budgets
 - v2.23 — §3.5 / §4.7 / new §4.9 / §8 / §9: EventBridge schedules (scan every 3 h, daily-cost 05:20, daily-summary
   23:40, digest Mon 06:30 UTC; scan not retried), AWS Budgets (account + per project, usage before credits) to the
   team topic, budget alert subscriber (idempotent, alarms skipped), schedules module (#37).
+- v2.24 — §6 / §8: dev scope enforced in IAM for remediation and action roles, key / attribute limits on workflow, action and notify findings writes; IAM review tool (#39).

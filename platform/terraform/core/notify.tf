@@ -93,6 +93,12 @@ data "aws_iam_policy_document" "notify" {
       variable = "dynamodb:Attributes"
       values   = ["resourceId", "findingType", "lastNotifiedAt"]
     }
+    # ForAllValues alone passes a request without the key.
+    condition {
+      test     = "Null"
+      variable = "dynamodb:Attributes"
+      values   = ["false"]
+    }
     condition {
       test     = "StringEqualsIfExists"
       variable = "dynamodb:ReturnValues"

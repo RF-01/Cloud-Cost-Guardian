@@ -797,3 +797,32 @@ def test_action_policy_conditions():
             assert statement["conditions"], sid
     assert policy["Tokens"]["resources"] == '[var.table_arns["tokens"]]'
     assert policy["StopTimelines"]["resources"] == "local.timeline_execution_arns"
+    # Links exist only for EC2_IDLE / EBS_UNATTACHED findings: instance / volume keys only (#39).
+    assert policy["Findings"]["conditions"] == [
+        ("ForAllValues:StringLike", "dynamodb:LeadingKeys", ["i-*", "vol-*"]),
+        ("Null", "dynamodb:LeadingKeys", ["false"])]
+
+
+def _statement_chunk(sid):
+    text = ACTION_TF.read_text(encoding="utf-8")
+    block = text[text.index('data "aws_iam_policy_document" "action" {'):]
+    for chunk in block.split("statement {")[1:]:
+        if f'sid = "{sid}"' in re.sub(r"\s+", " ", chunk):
+            return chunk
+    raise AssertionError(sid)
+
+
+DEV_SCOPE_DYNAMIC = re.compile(
+    r'dynamic "condition" \{\s*for_each = var\.dev_scope != "" \? \[var\.dev_scope\] : \[\]\s*content \{\s*'
+    r'test\s*= "StringEquals"\s*variable = "([^"]+)"\s*values\s*= \[condition\.value\]')
+
+
+@pytest.mark.parametrize("sid,key", [
+    ("ProtectTagOnly", "ec2:ResourceTag/guardian:dev-scope"),
+    ("RestoreFromGuardianSnapshots", "ec2:ResourceTag/guardian:dev-scope"),
+    ("RestoredVolumes", "aws:RequestTag/guardian:dev-scope"),
+    ("TagRestoredVolumes", "aws:RequestTag/guardian:dev-scope"),
+])
+def test_action_policy_dev_scope_in_iam(sid, key):
+    """In a personal stack every ec2 write also needs the dev-scope tag (#39); the team stack has no condition."""
+    assert DEV_SCOPE_DYNAMIC.findall(_statement_chunk(sid)) == [key]

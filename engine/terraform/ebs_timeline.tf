@@ -35,10 +35,21 @@ data "aws_iam_policy_document" "ebs_timeline" {
     resources = [local.remediation_arn, var.notify_function_arn]
   }
 
+  # Every UpdateItem in ebs_timeline.asl.json is keyed by $input.resourceId: an EBS_UNATTACHED volume ID.
   statement {
     sid       = "UpdateFindings"
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.table_arns["findings"]]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["vol-*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
   }
 
   # CreateSnapshotReminder: the only new item this workflow writes is a SNAPSHOT_REMINDER keyed by its snapshot ID.
@@ -50,6 +61,11 @@ data "aws_iam_policy_document" "ebs_timeline" {
       test     = "ForAllValues:StringLike"
       variable = "dynamodb:LeadingKeys"
       values   = ["snap-*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
     }
   }
 

@@ -58,10 +58,21 @@ data "aws_iam_policy_document" "action" {
   }
 
   # GetItem / ConditionCheckItem: the checks and the claim; UpdateItem: common/timeline.py.
+  # Links exist only for EC2_IDLE / EBS_UNATTACHED findings (CONTRACT §4.1), so only instance / volume keys.
   statement {
     sid       = "Findings"
     actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
     resources = [var.table_arns["findings"]]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["i-*", "vol-*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
   }
 
   statement {
@@ -117,6 +128,15 @@ data "aws_iam_policy_document" "action" {
       variable = "aws:RequestTag/guardian:protect"
       values   = ["true"]
     }
+    # In a personal stack only on resources tagged guardian:dev-scope = DEV_SCOPE (CONTRACT §6).
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
   }
 
   # Restore: only from snapshots the Guardian made (tagged guardian:source-volume) ...
@@ -128,6 +148,15 @@ data "aws_iam_policy_document" "action" {
       test     = "Null"
       variable = "aws:ResourceTag/guardian:source-volume"
       values   = ["false"]
+    }
+    # Guardian snapshots carry the volume's dev-scope tag (remediation copies the volume's tags).
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
     }
   }
 
@@ -141,6 +170,15 @@ data "aws_iam_policy_document" "action" {
       variable = "aws:RequestTag/guardian:restored-from"
       values   = ["false"]
     }
+    # _restore_tags copies the snapshot's tags, dev-scope included.
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "aws:RequestTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
   }
 
   # Tags on the new volume, only as part of CreateVolume (tag-on-create).
@@ -152,6 +190,14 @@ data "aws_iam_policy_document" "action" {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
       values   = ["CreateVolume"]
+    }
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "aws:RequestTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
     }
   }
 }

@@ -391,3 +391,11 @@ def test_mark_remediated_sets_contract_fields(sm):
         assert field in args["UpdateExpression"]
     resolved = sm["States"]["MarkResolved"]["Arguments"]
     assert resolved["UpdateExpression"] == "SET #st = :resolved, resolvedAt = :now, timelineStep = :done"
+
+
+def test_ec2_role_updates_only_instance_findings():
+    """#39: the EC2 workflow only updates EC2_IDLE findings, keyed by an instance ID; Null guards the key."""
+    tf = re.sub(r"\s+", " ", SFN_TF.read_text(encoding="utf-8"))
+    stmt = tf[tf.index('sid = "UpdateFindings"'):tf.index('sid = "WriteFailureAudit"')]
+    assert ('test = "ForAllValues:StringLike" variable = "dynamodb:LeadingKeys" values = ["i-*"]' in stmt)
+    assert 'test = "Null" variable = "dynamodb:LeadingKeys" values = ["false"]' in stmt

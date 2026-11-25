@@ -526,3 +526,13 @@ def test_branch_variables_are_set_on_every_way_in(sm):
         assert used <= set(state["Catch"][-1]["Assign"]), name
     for name in SNAPSHOT_PASS:
         assert used <= set(sm["States"][name]["Assign"]), name
+
+
+def test_ebs_role_findings_key_limits():
+    """#39: UpdateItem only on volume findings, PutItem only on snap-* reminders; both Null-guarded."""
+    tf = re.sub(r"\s+", " ", EBS_TF.read_text(encoding="utf-8"))
+    update = tf[tf.index('sid = "UpdateFindings"'):tf.index('sid = "PutSnapshotReminder"')]
+    put = tf[tf.index('sid = "PutSnapshotReminder"'):tf.index('sid = "WriteFailureAudit"')]
+    null = 'test = "Null" variable = "dynamodb:LeadingKeys" values = ["false"]'
+    assert 'variable = "dynamodb:LeadingKeys" values = ["vol-*"]' in update and null in update
+    assert 'variable = "dynamodb:LeadingKeys" values = ["snap-*"]' in put and null in put

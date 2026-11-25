@@ -130,10 +130,21 @@ data "aws_iam_policy_document" "ec2_timeline" {
     resources = [local.remediation_arn, var.notify_function_arn]
   }
 
+  # The EC2 workflow only runs for EC2_IDLE findings, keyed by an instance ID.
   statement {
     sid       = "UpdateFindings"
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.table_arns["findings"]]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["i-*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
   }
 
   statement {
