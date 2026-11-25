@@ -71,7 +71,8 @@ data "aws_iam_policy_document" "scanner" {
     resources = ["${aws_cloudwatch_log_group.scanner.arn}:*"]
   }
 
-  # Describe* calls don't support resource-level permissions.
+  # Describe* calls don't support resource-level permissions. DescribeSnapshots: the resolve pass checks whether a
+  # SNAPSHOT_REMINDER's snapshot still exists (task #35).
   statement {
     sid = "Ec2Describe"
     actions = [
@@ -79,6 +80,7 @@ data "aws_iam_policy_document" "scanner" {
       "ec2:DescribeInstances",
       "ec2:DescribeVolumes",
       "ec2:DescribeAddresses",
+      "ec2:DescribeSnapshots",
     ]
     resources = ["*"]
   }
@@ -90,13 +92,16 @@ data "aws_iam_policy_document" "scanner" {
     resources = ["*"]
   }
 
+  # Upsert / reopen / resolve (UpdateItem), re-read before acting (GetItem), and one paginated Scan per invocation
+  # listing the not-resolved findings for the resolve pass (task #35).
   statement {
     sid       = "FindingsTable"
-    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
     resources = [var.table_arns["findings"]]
   }
 
-  # Audit entries only (common/audit.py, CONTRACT §3.3): finding_opened, tags_copied, owner_found, and
+  # Audit entries only (common/audit.py, CONTRACT §3.3): finding_opened, finding_resolved, finding_reopened,
+  # tags_copied, owner_found, and
   # timeline_started / timeline_stopped written by common/timeline.py.
   statement {
     sid       = "WriteAudit"

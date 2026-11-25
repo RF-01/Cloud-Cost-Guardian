@@ -583,7 +583,7 @@ def test_report_only_kept_while_tag_present(aws, monkeypatch):
     assert starts == [] and summary["reportOnly"] == {}
 
 
-@pytest.mark.parametrize("status", ["remediated", "failed", "resolved"])
+@pytest.mark.parametrize("status", ["remediated", "failed"])  # resolved: reopened (see the #35 tests)
 def test_other_existing_statuses_kept(aws, status):
     vol = aws["ec2"].create_volume(AvailabilityZone=f"{REGION}a", Size=8)["VolumeId"]
     aws["table"].put_item(Item={"resourceId": vol, "findingType": "EBS_UNATTACHED", "status": status,
@@ -672,7 +672,7 @@ def stub_scan(monkeypatch, fail=()):
     """Replace scan_region: records the regions it is called with; raises for the regions in `fail`."""
     seen = []
 
-    def fake(region, now=None):
+    def fake(region, now=None, active=None):
         seen.append(region)
         if region in fail:
             raise RuntimeError(f"boom in {region}")
@@ -771,7 +771,8 @@ def test_one_failing_region_does_not_stop_the_others(aws, monkeypatch, capsys):
     assert summary["totals"] == {"findings": {"EBS_UNATTACHED": 2}, "timelines": {"started": 2},
                                  "reportOnly": {}, "tagCopy": {"copied": 2, "would_copy": 4},
                                  "attachmentRecords": {"written": 6},
-                                 "creatorLookup": {"found": 2, "skipped_cap": 4}, "skippedOutOfScope": 4}
+                                 "creatorLookup": {"found": 2, "skipped_cap": 4}, "resolution": {},
+                                 "skippedOutOfScope": 4}
     assert summary["slowestRegion"]["region"] in seen and summary["durationSeconds"] >= 0
     entries = logs(capsys)
     assert any(e["action"] == "scan_region" and e["region"] == "eu-west-1" and e["errorType"] == "RuntimeError"

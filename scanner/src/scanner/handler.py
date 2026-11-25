@@ -9,14 +9,20 @@ Before the detection rules, each region records volume attachments and copies mi
 instances to attached volumes and associated Elastic IPs (design §8.6, task #33; DRY_RUN = log only), so the
 missing-tag check sees the copied tags. Then in-scope resources still without an owner get it from their creator in
 CloudTrail (creator.py, task #34; results kept in creator-lookups, at most MAX_LOOKUPS_PER_REGION per region per
-scan, no more lookups in a region after its first throttle; DRY_RUN = log only). Not yet here: resolve / reopen (#35), emails (#36).
+scan, no more lookups in a region after its first throttle; DRY_RUN = log only).
+Resolve / reopen (design §9.7, CONTRACT §3.2, task #35): a problem seen again on a `resolved` finding reopens it
+(new firstSeenAt; timeline types start the next generation with reason "reopen"). After every detection rule, the
+region's not-resolved findings (one Scan per invocation, grouped by region) are resolved only on positive evidence
+that the problem is gone; missing or uncertain evidence leaves them unchanged (counted "unknown"). A region whose
+scan raised never gets that far, so nothing in it is resolved. Resolve / reopen change only finding records, so they
+are not gated by DRY_RUN. Not yet here: emails (#36).
 Cost estimates come from the internal price table (pricing.py, #21).
 """
 
 import json
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -89,6 +95,9 @@ class _Scan:
         self.creator_lookup = Counter()
         self.owner_copied = set()  # resource IDs whose owner tag was copied on this scan (ownerSource "copied")
         self.owner_cloudtrail = set()  # resource IDs whose owner tag was set from CloudTrail on this scan
+        self.resolution = Counter()  # resolved / reopened / unknown / skipped / error (task #35)
+        self.recorded = set()  # (resourceId, findingType) seen as a problem on this scan: never resolved
+        self.ec2_signals = {}  # instanceId -> (signals, classification), from _scan_instances (resolve pass)
 
     def attrs(self, resource_id, resource_type, tags):
         """The scanner attributes of a resource for this scan (CONTRACT §3.1)."""
@@ -102,16 +111,45 @@ class _Scan:
     def record(self, resource_id, finding_type, attrs, report_only=None):
         is_new, item = findings.upsert(resource_id, finding_type, attrs, self.now_iso)
         self.counts[finding_type] += 1
+        self.recorded.add((resource_id, finding_type))
+        start_reason = "new"
         if is_new:
-            # CONTRACT §3.3: a newly created finding (any type). Reopen / resolve are #35.
+            # CONTRACT §3.3: a newly created finding (any type).
             audit.write_audit(resource_id, "scanner", "finding_opened", finding_type=finding_type,
                               region=self.region,
                               details={k: attrs[k] for k in ("estimatedMonthlyCost", "missingTags")
                                        if attrs.get(k) is not None})
+        elif item.get("status") == "resolved":
+            item = self._reopen(item)
+            if item is None:
+                return None  # lost race or error: left as it is, counted and logged
+            start_reason = "reopen"
         if finding_type in TIMELINE_TYPES:
             item = self._apply_report_only(item, report_only)
-            self._maybe_start(item)
+            self._maybe_start(item, start_reason)
         return item
+
+    def _reopen(self, item):
+        """CONTRACT §3.2 reopen of a `resolved` finding whose problem is back. Returns the reopened finding, or None
+        (lost race: not an error; DynamoDB error: counted "error")."""
+        rid, ftype = item["resourceId"], item["findingType"]
+        previous = item.get("resolvedAt")
+        try:
+            reopened = findings.reopen(rid, ftype, self.now_iso)
+        except Exception as err:  # one bad finding must not stop the scan
+            self.resolution["error"] += 1
+            findings.log(rid, ftype, "reopen_finding", "error", error=f"{type(err).__name__}: {err}"[:300])
+            return None
+        if reopened is None:
+            self.resolution["skipped"] += 1
+            findings.log(rid, ftype, "reopen_finding", "skipped: status changed", region=self.region)
+            return None
+        self.resolution["reopened"] += 1
+        findings.log(rid, ftype, "reopen_finding", "reopened", region=self.region, previousResolvedAt=previous)
+        audit.write_audit(rid, "scanner", "finding_reopened", finding_type=ftype, region=self.region,
+                          generation=reopened.get("generation"), result="ok",
+                          details={"previousResolvedAt": previous})
+        return reopened
 
     def _apply_report_only(self, item, reason):
         """CONTRACT §3.2: report-only rules (tag found / tag removed). Returns the finding as it is now."""
@@ -130,7 +168,7 @@ class _Scan:
                 except Exception as err:  # one bad finding must not stop the scan
                     self.report_only["error"] += 1
                     findings.log(rid, ftype, "report_only", "error", error=str(err))
-            else:  # remediated (and resolved, handled by #35): unchanged
+            else:  # remediated: unchanged (a resolved finding was reopened before this, so it is open here)
                 self.report_only["unchanged"] += 1
                 findings.log(rid, ftype, "report_only", "unchanged", status=status, reportOnlyReason=reason)
         elif not reason and current and status == "open":
@@ -140,7 +178,9 @@ class _Scan:
                 return {k: v for k, v in item.items() if k != "reportOnlyReason"}
         return item
 
-    def _maybe_start(self, item):
+    def _maybe_start(self, item, reason="new"):
+        """Start the timeline of an `open` finding (reason "new", or "reopen" right after a reopen), restart a
+        `failed` one, or retry a pending start."""
         if item.get("reportOnlyReason"):
             return
         status = item.get("status")
@@ -156,7 +196,7 @@ class _Scan:
             self._maybe_restart(item)
             return
         try:
-            out = timeline.start_timeline(rid, ftype, "new")
+            out = timeline.start_timeline(rid, ftype, reason if status == "open" else "new")
             self.timelines[out["result"]] += 1
         except Exception as err:  # one bad finding must not stop the scan
             self.timelines["error"] += 1
@@ -212,6 +252,7 @@ def _scan_instances(scan, ec2, cloudwatch, instances, scope):
         volumes = [m["Ebs"]["VolumeId"] for m in inst.get("BlockDeviceMappings", []) if "Ebs" in m]
         signals = idle.instance_signals(cloudwatch, iid, volumes, start, scan.now)
         classification = idle.classify(signals, window)
+        scan.ec2_signals[iid] = (signals, classification)  # the resolve pass reuses them (no second fetch)
         findings.log(iid, "EC2_IDLE", "classify", classification or "active", **signals)
         if classification != "idle":
             continue
@@ -467,10 +508,252 @@ def _lookup_owners(scan, ec2, instances, volumes, addresses, scope):
             findings.log(resource_id, "*", "creator_lookup", "error", error=f"{type(err).__name__}: {err}"[:300])
 
 
-def scan_region(region, now=None):
-    """Run every detection rule in one region. Returns that region's summary."""
+# ---------------------------------------------------------------- resolve (design §9.7, CONTRACT §3.2, #35)
+
+GONE, STILL, UNKNOWN = "gone", "still", "unknown"
+ACTIVE_STATUSES = ("open", "in_progress", "failed")
+SNAPSHOT_NOT_FOUND = "InvalidSnapshot.NotFound"
+
+
+def _parse_iso(value):
+    try:
+        return datetime.strptime(value or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+class _Seen:
+    """The region's FULL describe results (in-scope or not), after tag copying / creator lookup, for the verdicts."""
+
+    def __init__(self, scan, ec2, instances, volumes, addresses, scope):
+        self.scan = scan
+        self.ec2 = ec2
+        self.scope = scope
+        self.instances = {i["InstanceId"]: i for i in instances}  # terminated / shutting-down are left out
+        self.volumes = {v["VolumeId"]: v for v in volumes}
+        self.by_allocation = {a["AllocationId"]: a for a in addresses if a.get("AllocationId")}
+        self.by_ip = {a["PublicIp"]: a for a in addresses if a.get("PublicIp")}
+        self.window_start = scan.now - timedelta(minutes=config.detection_window_minutes())
+
+    def address(self, resource_id):
+        """Like the finding key: AllocationId, else PublicIp."""
+        return self.by_allocation.get(resource_id) or self.by_ip.get(resource_id)
+
+    def out_of_scope(self, resource):
+        return not _in_scope(_tags(resource), self.scope)
+
+
+def _ec2_verdict(seen, item):
+    """EC2_IDLE. Remediated: only (a) a real restart after remediatedAt or (b) terminated / missing."""
+    inst = seen.instances.get(item["resourceId"])
+    if inst is None:
+        return GONE, "terminated"  # missing applies regardless of scope (the finding is in this stack's table)
+    if seen.out_of_scope(inst):
+        return UNKNOWN, "out_of_scope"
+    state = inst["State"]["Name"]
+    if item.get("status") == "remediated":
+        remediated_at = _parse_iso(item.get("remediatedAt"))  # absent / unreadable: rule (a) never applies
+        if state == "running" and remediated_at is not None and inst["LaunchTime"] > remediated_at:
+            return GONE, "restarted"
+        return STILL, None  # e.g. a dry-run "stop": LaunchTime unchanged, so it stays remediated (no loop)
+    if state == "pending":
+        return UNKNOWN, "pending"
+    if state != "running":
+        return GONE, "stopped"
+    if inst["LaunchTime"] > seen.window_start:
+        return GONE, "restarted"
+    signals, classification = seen.scan.ec2_signals.get(inst["InstanceId"], (None, None))
+    if signals is None or signals.get("cpuAvg") is None:
+        return UNKNOWN, "no_cpu_data"  # classify() returns None for busy AND no data: check cpuAvg ourselves
+    if classification != "idle":
+        return GONE, "not_idle"  # underused, periodic or busy
+    return STILL, None
+
+
+def _ebs_verdict(seen, item):
+    vol = seen.volumes.get(item["resourceId"])
+    if vol is None:
+        return GONE, "resource_gone"
+    if seen.out_of_scope(vol):
+        return UNKNOWN, "out_of_scope"
+    if vol.get("State") == "in-use":
+        return GONE, "attached"
+    if vol.get("State") == "available":
+        return STILL, None
+    return UNKNOWN, "volume_state_" + str(vol.get("State"))
+
+
+def _eip_unassociated_verdict(seen, item):
+    addr = seen.address(item["resourceId"])
+    if addr is None:
+        return GONE, "resource_gone"
+    if seen.out_of_scope(addr):
+        return UNKNOWN, "out_of_scope"
+    if addr.get("AssociationId"):
+        return GONE, "associated"
+    return STILL, None
+
+
+def _eip_on_stopped_verdict(seen, item):
+    addr = seen.address(item["resourceId"])
+    if addr is None:
+        return GONE, "resource_gone"
+    if seen.out_of_scope(addr):
+        return UNKNOWN, "out_of_scope"
+    if not addr.get("AssociationId") or not addr.get("InstanceId"):
+        return GONE, "associated"  # no longer on an instance (unassociated, or on a network interface)
+    inst = seen.instances.get(addr["InstanceId"])
+    if inst is None:
+        return GONE, "terminated"
+    state = inst["State"]["Name"]
+    if state == "running":
+        return GONE, "restarted"
+    if state != "stopped":
+        return UNKNOWN, "instance_state_" + state
+    if _stop_time(inst) is None:
+        return UNKNOWN, "stop_time_unknown"
+    return STILL, None
+
+
+def _missing_tags_verdict(seen, item):
+    rtype = item.get("resourceType")
+    if rtype == "ec2":
+        resource = seen.instances.get(item["resourceId"])
+    elif rtype == "ebs":
+        resource = seen.volumes.get(item["resourceId"])
+    elif rtype == "eip":
+        resource = seen.address(item["resourceId"])
+    else:
+        return UNKNOWN, "resource_type_" + str(rtype)
+    if resource is None:
+        return GONE, "resource_gone"
+    if seen.out_of_scope(resource):
+        return UNKNOWN, "out_of_scope"
+    tags = _tags(resource)  # after tag copying / creator lookup (a dry-run changes nothing in memory)
+    if all(not _blank(tags, k) for k in REQUIRED_TAGS):
+        return GONE, "tags_present"
+    return STILL, None
+
+
+def _snapshot_verdict(seen, item):
+    try:
+        seen.ec2.describe_snapshots(SnapshotIds=[item["resourceId"]])
+    except Exception as err:
+        code = getattr(err, "response", {}).get("Error", {}).get("Code")
+        if code == SNAPSHOT_NOT_FOUND:
+            return GONE, "snapshot_gone"
+        return UNKNOWN, "describe_error: " + (code or type(err).__name__)  # never resolve on errors
+    return STILL, None
+
+
+VERDICTS = {
+    "EC2_IDLE": _ec2_verdict,
+    "EBS_UNATTACHED": _ebs_verdict,
+    "EIP_UNASSOCIATED": _eip_unassociated_verdict,
+    "EIP_ON_STOPPED_INSTANCE": _eip_on_stopped_verdict,
+    "MISSING_TAGS": _missing_tags_verdict,
+    "SNAPSHOT_REMINDER": _snapshot_verdict,
+}
+
+
+def _verdict(seen, item):
+    """(GONE | STILL | UNKNOWN, reason) for a finding, or None if this status / type is never resolved."""
+    status, ftype = item.get("status"), item.get("findingType")
+    if status not in ACTIVE_STATUSES and not (status == "remediated" and ftype == "EC2_IDLE"):
+        return None  # remediated EBS (deleted on purpose) and every other remediated type: never touched
+    if ftype not in VERDICTS:
+        return UNKNOWN, "finding_type_" + str(ftype)
+    if status == "in_progress" and item.get("timelineStep") == "acting":
+        return UNKNOWN, "acting"  # the workflow is stopping / deleting right now: let it set remediated
+    return VERDICTS[ftype](seen, item)
+
+
+def _resolve_one(scan, seen, item, reason):
+    rid, ftype, seen_status = item["resourceId"], item["findingType"], item["status"]
+    counts = scan.resolution
+    fresh = findings.get_finding(rid, ftype)  # re-read right before acting
+    if fresh is None or fresh.get("status") != seen_status:
+        counts["skipped"] += 1
+        findings.log(rid, ftype, "resolve_finding", "skipped: status changed", region=scan.region,
+                     seenStatus=seen_status, status=(fresh or {}).get("status"))
+        return
+    if ftype != "SNAPSHOT_REMINDER":  # in-memory verdicts are free: confirm on the fresh item
+        verdict, reason = _verdict(seen, fresh) or (STILL, None)
+        if verdict != GONE:
+            if verdict == UNKNOWN:
+                counts["unknown"] += 1
+            findings.log(rid, ftype, "resolve_finding", verdict, region=scan.region, reason=reason)
+            return
+    if ftype in TIMELINE_TYPES and seen_status in ACTIVE_STATUSES:
+        timeline.stop_timeline(rid, ftype, "resolved")  # stops a running execution, sets resolvedAt, audits
+    elif not findings.resolve(rid, ftype, seen_status, scan.now_iso):
+        counts["skipped"] += 1
+        findings.log(rid, ftype, "resolve_finding", "skipped: status changed", region=scan.region,
+                     seenStatus=seen_status)
+        return
+    counts["resolved"] += 1
+    findings.log(rid, ftype, "resolve_finding", "resolved", region=scan.region, reason=reason,
+                 previousStatus=seen_status)
+    audit.write_audit(rid, "scanner", "finding_resolved", finding_type=ftype, region=scan.region,
+                      generation=fresh.get("generation"), result="ok",
+                      details={"reason": reason, "previousStatus": seen_status})
+
+
+def _resolve_pass(scan, seen, active):
+    """Resolve this region's not-resolved findings whose problem is gone. Never raises: one finding's failure is
+    counted "error" and logged, and the rest go on."""
+    for item in active:
+        rid, ftype = item.get("resourceId"), item.get("findingType")
+        if (rid, ftype) in scan.recorded:
+            continue  # seen as a problem on this scan
+        try:
+            out = _verdict(seen, item)
+            if out is None:
+                continue
+            verdict, reason = out
+            if verdict == UNKNOWN:
+                scan.resolution["unknown"] += 1
+                findings.log(rid, ftype, "resolve_finding", "unknown", region=scan.region, reason=reason,
+                             status=item.get("status"))
+            elif verdict == GONE:
+                _resolve_one(scan, seen, item, reason)
+        except Exception as err:
+            scan.resolution["error"] += 1
+            findings.log(rid, ftype, "resolve_finding", "error", region=scan.region,
+                         error=f"{type(err).__name__}: {err}"[:300])
+
+
+def _active_by_region():
+    """The not-resolved findings grouped by region, or None if the Scan failed (logged; nothing is resolved)."""
+    try:
+        items = findings.list_active()
+    except Exception as err:
+        findings.log("*", "*", "list_findings", "error", error=f"{type(err).__name__}: {err}"[:300])
+        return None
+    by_region = defaultdict(list)
+    for item in items:
+        if not item.get("region"):
+            findings.log(item.get("resourceId"), item.get("findingType"), "resolve_finding",
+                         "skipped: no region", status=item.get("status"))
+            continue
+        by_region[item["region"]].append(item)
+    return by_region
+
+
+def scan_region(region, now=None, active=None):
+    """Run every detection rule in one region, then the resolve pass. Returns that region's summary.
+
+    `active`: this region's not-resolved findings (the handler loads them once per invocation); None = load them
+    here (direct callers, tests)."""
     scan = _Scan(region, now or datetime.now(timezone.utc))
     scope = config.dev_scope()
+    if active is None:
+        by_region = _active_by_region()
+        if by_region is None:
+            scan.resolution["error"] += 1
+            active = []  # no resolve pass; detection and reopen still run
+        else:
+            active = by_region.get(region, [])
     ec2 = clients.client("ec2", region)  # this thread's session (boto3 sessions are not thread-safe)
     cloudwatch = clients.client("cloudwatch", region)
 
@@ -483,6 +766,8 @@ def scan_region(region, now=None):
     _scan_instances(scan, ec2, cloudwatch, instances, scope)
     _scan_volumes(scan, volumes, scope)
     _scan_addresses(scan, addresses, instances, scope)
+    # Last: only a region whose detection finished gets here (an exception above skips it).
+    _resolve_pass(scan, _Seen(scan, ec2, instances, volumes, addresses, scope), active)
 
     if scope:
         findings.log(region, "*", "dev_scope_filter", "skipped", skipped=scan.skipped, devScope=scope)
@@ -495,6 +780,7 @@ def scan_region(region, now=None):
         "tagCopy": dict(scan.tag_copy),
         "attachmentRecords": dict(scan.attachment_records),
         "creatorLookup": dict(scan.creator_lookup),
+        "resolution": dict(scan.resolution),
     }
 
 
@@ -519,11 +805,11 @@ def resolve_regions():
         return [config.DEFAULT_REGION], {"mode": "all", "fallback": config.DEFAULT_REGION, "error": error}
 
 
-def _timed_scan(region, now, durations):
+def _timed_scan(region, now, active, durations):
     """Worker thread: scan one region and record how long it took (also when it raises)."""
     started = time.monotonic()
     try:
-        return scan_region(region, now=now)
+        return scan_region(region, now=now, active=active)
     finally:
         durations[region] = time.monotonic() - started  # one key per thread: safe without a lock
 
@@ -537,7 +823,8 @@ def _collect(future):
 
 
 def _merge(totals, summary):
-    for key in ("findings", "timelines", "reportOnly", "tagCopy", "attachmentRecords", "creatorLookup"):
+    for key in ("findings", "timelines", "reportOnly", "tagCopy", "attachmentRecords", "creatorLookup",
+                "resolution"):
         totals[key].update(summary.get(key) or {})
     totals["skippedOutOfScope"] += summary.get("skippedOutOfScope") or 0
 
@@ -548,15 +835,22 @@ def handler(event, context):
     clients.preload(config.DEFAULT_REGION)  # parse the service models once, before the threads (clients.py)
     regions, discovery = resolve_regions()
     workers = min(config.scan_max_workers(), len(regions))
+    # The not-resolved findings, loaded once for every region (task #35). If the Scan fails, every region gets an
+    # empty list: no resolve pass this invocation, detection and reopen still run.
+    by_region = _active_by_region()
 
     durations = {}
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scan") as pool:
-        futures = {region: pool.submit(_timed_scan, region, now, durations) for region in regions}
+        futures = {region: pool.submit(_timed_scan, region, now, (by_region or {}).get(region, []), durations)
+                   for region in regions}
         results = {region: _collect(future) for region, future in futures.items()}
 
     per_region, scanned, failed = {}, [], {}
     totals = {"findings": Counter(), "timelines": Counter(), "reportOnly": Counter(), "tagCopy": Counter(),
-              "attachmentRecords": Counter(), "creatorLookup": Counter(), "skippedOutOfScope": 0}
+              "attachmentRecords": Counter(), "creatorLookup": Counter(), "resolution": Counter(),
+              "skippedOutOfScope": 0}
+    if by_region is None:
+        totals["resolution"]["error"] += 1
     for region in regions:
         (summary, err), seconds = results[region], durations.get(region, 0.0)
         if err is None:
@@ -571,8 +865,6 @@ def handler(event, context):
             print(json.dumps({"resourceId": region, "findingType": "*", "action": "scan_region", "result": "error",
                               "region": region, "errorType": type(err).__name__, "message": str(err)}))
 
-    # Note for #35 (resolve / reopen): resolve rules must only apply to regions in regionsScanned. A region in
-    # regionsFailed was not seen this run, so its findings must never be resolved because they are "missing".
     slowest = max(regions, key=lambda r: durations.get(r, 0.0))
     out = {
         "regionsScanned": scanned,

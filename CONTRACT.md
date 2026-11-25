@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.20 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.21 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -103,9 +103,9 @@ The scanner resolves it once the snapshot is gone (#35).
 
 | Transition | Who | Rule |
 |---|---|---|
-| → `open` | scanner | new finding, or reopen of a `resolved` one (a reopen sets a new `firstSeenAt`, so "cost so far" counts the current episode only) |
+| → `open` | scanner | new finding, or reopen of a `resolved` one (a reopen sets a new `firstSeenAt`, so "cost so far" counts the current episode only). Reopen: the scanner sets `status` open and a new `firstSeenAt` and removes the old episode's `resolvedAt`, `remediatedAt`, `dryRun`, `realizedMonthlySavings`, `failedStep`, `errorMessage`, `deadlineAt`; `generation`, `postponeCount`, `restartCount` are kept (limits are per finding, not per episode); timeline types then start the next generation with `start_timeline(..., "reopen")`. |
 | `open` → `in_progress` | scanner via `timeline.start_timeline` | only `EC2_IDLE` / `EBS_UNATTACHED`, not report-only |
-| `open` / `in_progress` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present; or the workflow's `STOP_INSTANCE` found the instance already stopped by someone else (not dry-run). **Never applies to `remediated` findings** (see below). |
+| `open` / `in_progress` / `failed` → `resolved` | scanner (via `timeline.stop_timeline` if a timeline runs), or the workflow's re-check | resource active / attached / associated / deleted / tags now present; or the workflow's `STOP_INSTANCE` found the instance already stopped by someone else (not dry-run). **Never applies to `remediated` findings** (see below). Resolved only on positive evidence (resource gone, EC2 stopped / terminated / restarted / no longer idle with CPU data, volume attached, address associated or released, owner and project tags present, `SNAPSHOT_REMINDER`: the snapshot is gone); missing or uncertain evidence leaves the finding unchanged. Only in regions the scan reached. Not gated by DRY_RUN. |
 | `in_progress` → `remediated` | engine workflow | after stop, or snapshot + delete; also in dry-run, with `dryRun = true` |
 | `in_progress` → `failed` | engine Catch branch (direct DynamoDB update) | sets `failedStep` (the workflow state's name), `errorMessage` (≤ 500 chars), `timelineStep = done`; only with the same generation and status `in_progress`. A failure after the finding left `in_progress` (the `STOP_CONFIRMATION` email) only writes a `workflow_failed` audit entry and fails the execution; the status is unchanged. |
 | `failed` → `in_progress` | scanner via `timeline.start_timeline` | only if `restartCount < MAX_RESTARTS`; increments it. The scanner does this on the next scan that still sees the problem (resource still idle / unattached, not report-only). At the limit the finding stays failed (dashboard) and the scanner only logs it; a team member resets it after fixing the cause by removing restartCount (`aws dynamodb update-item ... --update-expression 'REMOVE restartCount'`), and the next scan restarts it. |
@@ -144,7 +144,7 @@ Who writes each event:
 
 | Writer | `actor` | Events |
 |---|---|---|
-| scanner | `scanner` | `finding_opened` (every new finding, all types incl. `MISSING_TAGS`), `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found`. `tags_copied`: Written only for a real copy (DRY_RUN=false), once per resource: details {tags, fromInstance}; result ok \| error. In dry-run the scanner only logs. `owner_found`: written once, when a creator lookup first returns found (also in dry-run, with dryRun true); details {email, method, creatorArn}. |
+| scanner | `scanner` | `finding_opened` (every new finding, all types incl. `MISSING_TAGS`), `finding_resolved`, `finding_reopened`, `tags_copied`, `owner_found`. `tags_copied`: Written only for a real copy (DRY_RUN=false), once per resource: details {tags, fromInstance}; result ok \| error. In dry-run the scanner only logs. `owner_found`: written once, when a creator lookup first returns found (also in dry-run, with dryRun true); details {email, method, creatorArn}. `finding_resolved`: details {reason, previousStatus}. `finding_reopened`: details {previousResolvedAt}. Resolving a timeline finding also writes `timeline_stopped`. |
 | `common/timeline.py` | the caller (`scanner` / `action-link`) | `timeline_started` (result `started` / `adopted` only; `generation` = the new one), `timeline_stopped` |
 | notify | `notify` | `notice_sent`, `final_warning_sent`, `email_fallback` |
 | remediation | `remediation` | `instance_stopped` (also a dry-run stop; not when someone else had stopped it), `snapshot_created`, `volume_deleted` |
@@ -487,3 +487,5 @@ budget amounts.
   associated Elastic IPs, dry-run = log only) and volume-attachments records (#33).
 - v2.20 — §3.1 / §3.3 / §3.5 / §6 CloudTrail creator lookup: owner tag from the creating identity (`found`
   permanent, `unknown` retried after 24 h, `reason`), `owner_found` audit, dry-run = log only (#34).
+- v2.21 — §3.2 resolve on positive evidence (also from `failed`, `SNAPSHOT_REMINDER` ends when the snapshot is
+  gone) and reopen rules; §3.3 details of `finding_resolved` / `finding_reopened` (#35).

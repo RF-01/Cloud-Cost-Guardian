@@ -1,9 +1,14 @@
-"""Writes findings to <prefix>findings exactly per CONTRACT §3.1.
+"""Reads and writes findings in <prefix>findings exactly per CONTRACT §3.1 / §3.2.
 
 The scanner owns the descriptive attributes (resourceType, region, owner, ownerSource, project, name,
 classification, estimatedMonthlyCost, estimatedSnapshotMonthlyCost, missingTags, firstSeenAt, lastSeenAt).
-It never touches generation,
-execution fields, timelineStep or counters, and only sets `status` on a new finding (if_not_exists).
+It never touches generation, execution fields, timelineStep or counters. It sets `status` only:
+- on a new finding (if_not_exists → open);
+- to resolve a finding whose problem is gone (task #35): `resolve` here, conditional on the status it read
+  (timeline findings that are open / in_progress / failed go through common/timeline.stop_timeline instead);
+- to reopen a resolved finding whose problem is back (`reopen`, conditional on status resolved): new firstSeenAt,
+  the old episode's outcome fields removed (REOPEN_REMOVED).
+`list_active` loads the not-resolved findings (one paginated Scan) for the resolve pass.
 """
 
 import json
@@ -19,6 +24,13 @@ SCANNER_ATTRIBUTES = ("resourceType", "region", "owner", "ownerSource", "project
                       "estimatedMonthlyCost", "estimatedSnapshotMonthlyCost", "missingTags")
 # Never REMOVEd: None means "could not price this scan" (pricing logs price_unknown), so the last estimate stays.
 NEVER_REMOVE = ("estimatedMonthlyCost", "estimatedSnapshotMonthlyCost")
+# What the resolve pass needs from each not-resolved finding (list_active).
+ACTIVE_PROJECTION = ("resourceId", "findingType", "status", "region", "resourceType", "generation",
+                     "remediatedAt", "timelineStep")
+# CONTRACT §3.2 reopen: the old episode's outcome. generation, execution fields, timelineStep, postponeCount,
+# restartCount and lastNotifiedAt are kept.
+REOPEN_REMOVED = ("resolvedAt", "remediatedAt", "dryRun", "realizedMonthlySavings", "failedStep", "errorMessage",
+                  "deadlineAt")
 
 
 def table():
@@ -111,3 +123,58 @@ def clear_report_only(resource_id, finding_type):
         return True
     except table().meta.client.exceptions.ConditionalCheckFailedException:
         return False
+
+
+def list_active():
+    """Every finding whose status is not `resolved` (paginated Scan, only ACTIVE_PROJECTION). Raises on errors."""
+    names = {f"#p{i}": key for i, key in enumerate(ACTIVE_PROJECTION)}  # status / region are reserved words
+    kwargs = {
+        "FilterExpression": "#p2 <> :resolved",
+        "ProjectionExpression": ", ".join(names),
+        "ExpressionAttributeNames": names,
+        "ExpressionAttributeValues": {":resolved": "resolved"},
+    }
+    items = []
+    while True:
+        page = table().scan(**kwargs)
+        items.extend(page.get("Items", []))
+        if not page.get("LastEvaluatedKey"):
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def get_finding(resource_id, finding_type):
+    """The finding as stored now (consistent read), or None."""
+    return table().get_item(Key={"resourceId": resource_id, "findingType": finding_type},
+                            ConsistentRead=True).get("Item")
+
+
+def resolve(resource_id, finding_type, expected_status, now):
+    """SET status resolved, resolvedAt = now, only if the status is still expected_status. Returns True if written."""
+    try:
+        table().update_item(
+            Key={"resourceId": resource_id, "findingType": finding_type},
+            UpdateExpression="SET #st = :resolved, resolvedAt = :now",
+            ConditionExpression="#st = :expected",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={":resolved": "resolved", ":now": now, ":expected": expected_status},
+        )
+        return True
+    except table().meta.client.exceptions.ConditionalCheckFailedException:
+        return False
+
+
+def reopen(resource_id, finding_type, now):
+    """CONTRACT §3.2 reopen of a `resolved` finding (conditional): status open, firstSeenAt = now, REOPEN_REMOVED
+    removed. Returns the finding after the write, or None if it was no longer resolved (lost race)."""
+    try:
+        return table().update_item(
+            Key={"resourceId": resource_id, "findingType": finding_type},
+            UpdateExpression="SET #st = :open, firstSeenAt = :now REMOVE " + ", ".join(REOPEN_REMOVED),
+            ConditionExpression="#st = :resolved",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={":open": "open", ":now": now, ":resolved": "resolved"},
+            ReturnValues="ALL_NEW",
+        )["Attributes"]
+    except table().meta.client.exceptions.ConditionalCheckFailedException:
+        return None
