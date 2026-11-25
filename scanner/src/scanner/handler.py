@@ -7,7 +7,9 @@ one failing region never stops the others. Each thread has its own boto3 session
 client is bounded by timeouts and retries so one slow region can't eat the 5-minute timeout (design §17).
 Before the detection rules, each region records volume attachments and copies missing owner / project tags from
 instances to attached volumes and associated Elastic IPs (design §8.6, task #33; DRY_RUN = log only), so the
-missing-tag check sees the copied tags. Not yet here: CloudTrail lookup (#34), resolve / reopen (#35), emails (#36).
+missing-tag check sees the copied tags. Then in-scope resources still without an owner get it from their creator in
+CloudTrail (creator.py, task #34; results kept in creator-lookups, at most MAX_LOOKUPS_PER_REGION per region per
+scan, no more lookups in a region after its first throttle; DRY_RUN = log only). Not yet here: resolve / reopen (#35), emails (#36).
 Cost estimates come from the internal price table (pricing.py, #21).
 """
 
@@ -19,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from common import audit, idle, timeline
-from scanner import attachments, clients, config, findings, pricing
+from scanner import attachments, clients, config, creator, findings, pricing
 
 TIMELINE_TYPES = ("EC2_IDLE", "EBS_UNATTACHED")
 REQUIRED_TAGS = ("owner", "project")
@@ -84,13 +86,17 @@ class _Scan:
         self.report_only = Counter()
         self.tag_copy = Counter()
         self.attachment_records = Counter()
+        self.creator_lookup = Counter()
         self.owner_copied = set()  # resource IDs whose owner tag was copied on this scan (ownerSource "copied")
+        self.owner_cloudtrail = set()  # resource IDs whose owner tag was set from CloudTrail on this scan
 
     def attrs(self, resource_id, resource_type, tags):
         """The scanner attributes of a resource for this scan (CONTRACT §3.1)."""
         attrs = _base_attrs(resource_type, self.region, tags)
         if resource_id in self.owner_copied and attrs["owner"]:
             attrs["ownerSource"] = "copied"
+        elif resource_id in self.owner_cloudtrail and attrs["owner"]:
+            attrs["ownerSource"] = "cloudtrail"
         return attrs
 
     def record(self, resource_id, finding_type, attrs, report_only=None):
@@ -359,6 +365,108 @@ def _copy_tags(scan, ec2, instances, volumes, addresses, scope):
         _copy_from_instance(scan, ec2, addr, addr["AllocationId"], addr["InstanceId"], by_id, dry_run)
 
 
+# ---------------------------------------------------------------- creator lookup (design §8.6 step 2, #34)
+
+
+def _owner_candidates(instances, volumes, addresses, scope):
+    """In-scope resources still without an owner after tag copying: (resourceType, id, resource)."""
+    out = []
+    for inst in instances:  # _all_instances already leaves out terminated / shutting-down
+        if _in_scope(_tags(inst), scope) and _blank(_tags(inst), "owner"):
+            out.append(("ec2", inst["InstanceId"], inst))
+    for vol in volumes:  # in-use volumes: their instance is looked up, tag copying does the rest
+        if vol.get("State") == "available" and _in_scope(_tags(vol), scope) and _blank(_tags(vol), "owner"):
+            out.append(("ebs", vol["VolumeId"], vol))
+    for addr in addresses:  # instance-associated EIPs get the owner by tag copying
+        if not addr.get("AllocationId") or (addr.get("AssociationId") and addr.get("InstanceId")):
+            continue
+        if _in_scope(_tags(addr), scope) and _blank(_tags(addr), "owner"):
+            out.append(("eip", addr["AllocationId"], addr))
+    return out
+
+
+def _young_unknown(record, now):
+    try:
+        looked_up = datetime.strptime(record.get("lookedUpAt", ""), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False  # unreadable: look it up again
+    return now - looked_up < timedelta(hours=config.UNKNOWN_RETRY_HOURS)
+
+
+def _set_owner(scan, ec2, resource, resource_id, email, method, dry_run):
+    """Tag the resource's owner from a `found` record. In-memory tags change only after a real, successful write."""
+    if dry_run:
+        scan.creator_lookup["would_set"] += 1
+        findings.log(resource_id, "*", "set_owner", "dry-run: would set", owner=email, method=method)
+        return
+    try:
+        ec2.create_tags(Resources=[resource_id], Tags=[{"Key": "owner", "Value": email}])
+    except Exception as err:  # tags unchanged; the stored `found` record is used again next scan
+        scan.creator_lookup["error"] += 1
+        findings.log(resource_id, "*", "set_owner", "error", owner=email, method=method,
+                     error=f"{type(err).__name__}: {err}"[:300])
+        return
+    kept = [t for t in resource.get("Tags") or [] if t["Key"] != "owner"]  # drops a blank owner value
+    resource["Tags"] = kept + [{"Key": "owner", "Value": email}]
+    scan.owner_cloudtrail.add(resource_id)
+    scan.creator_lookup["set"] += 1
+    findings.log(resource_id, "*", "set_owner", "set", owner=email, method=method)
+
+
+def _lookup_owner(scan, ec2, lookup, resource_type, resource_id, resource, dry_run):
+    counts = scan.creator_lookup
+    record = creator.get_record(resource_id)
+    if record and record.get("result") == "found" and record.get("email"):
+        counts["cached"] += 1  # permanent: no CloudTrail call, no new owner_found
+        _set_owner(scan, ec2, resource, resource_id, record["email"], record.get("method"), dry_run)
+        return
+    if record and record.get("result") == "unknown" and _young_unknown(record, scan.now):
+        counts["cached"] += 1
+        return
+    if lookup.throttled:
+        counts["skipped_throttle"] += 1  # no more CloudTrail / IAM calls in this region's scan
+        return
+    if lookup.resources >= config.MAX_LOOKUPS_PER_REGION:
+        counts["skipped_cap"] += 1  # left for the next scan
+        return
+    try:
+        result = lookup.find(resource_type, resource_id)
+    except Exception as err:
+        if not creator.is_throttle(err):
+            raise
+        lookup.throttled = True  # stop calling CloudTrail / IAM for the rest of this region's scan
+        counts["throttled"] += 1  # not stored: the next scan retries
+        findings.log(resource_id, "*", "creator_lookup", "throttled", error=f"{type(err).__name__}: {err}"[:300])
+        return
+    creator.put_record(dict(result, resourceId=resource_id, region=scan.region, lookedUpAt=scan.now_iso))
+    if result["result"] != "found":
+        counts["unknown"] += 1
+        findings.log(resource_id, "*", "creator_lookup", "unknown: " + result["reason"], method=result["method"])
+        return
+    counts["found"] += 1
+    findings.log(resource_id, "*", "creator_lookup", "found", method=result["method"])
+    details = {k: result[k] for k in ("email", "method", "creatorArn") if result.get(k)}
+    audit.write_audit(resource_id, "scanner", "owner_found", region=scan.region, dry_run=dry_run, result="ok",
+                      details=details)
+    _set_owner(scan, ec2, resource, resource_id, result["email"], result["method"], dry_run)
+
+
+def _lookup_owners(scan, ec2, instances, volumes, addresses, scope):
+    """design §8.6 step 2: owner from the creator in CloudTrail, for what tag copying could not fill. Never raises:
+    one resource's failure is counted and logged, and the next resource goes on."""
+    candidates = _owner_candidates(instances, volumes, addresses, scope)
+    if not candidates:
+        return
+    lookup = creator.Lookup(scan.region)
+    dry_run = config.dry_run()
+    for resource_type, resource_id, resource in candidates:
+        try:
+            _lookup_owner(scan, ec2, lookup, resource_type, resource_id, resource, dry_run)
+        except Exception as err:  # errors are never stored: the next scan retries
+            scan.creator_lookup["error"] += 1
+            findings.log(resource_id, "*", "creator_lookup", "error", error=f"{type(err).__name__}: {err}"[:300])
+
+
 def scan_region(region, now=None):
     """Run every detection rule in one region. Returns that region's summary."""
     scan = _Scan(region, now or datetime.now(timezone.utc))
@@ -371,6 +479,7 @@ def scan_region(region, now=None):
     addresses = ec2.describe_addresses()["Addresses"]
     _record_attachments(scan, volumes, scope)
     _copy_tags(scan, ec2, instances, volumes, addresses, scope)  # before the rules: they must see copied tags
+    _lookup_owners(scan, ec2, instances, volumes, addresses, scope)  # after copying: only what is still missing
     _scan_instances(scan, ec2, cloudwatch, instances, scope)
     _scan_volumes(scan, volumes, scope)
     _scan_addresses(scan, addresses, instances, scope)
@@ -385,6 +494,7 @@ def scan_region(region, now=None):
         "reportOnly": dict(scan.report_only),
         "tagCopy": dict(scan.tag_copy),
         "attachmentRecords": dict(scan.attachment_records),
+        "creatorLookup": dict(scan.creator_lookup),
     }
 
 
@@ -427,7 +537,7 @@ def _collect(future):
 
 
 def _merge(totals, summary):
-    for key in ("findings", "timelines", "reportOnly", "tagCopy", "attachmentRecords"):
+    for key in ("findings", "timelines", "reportOnly", "tagCopy", "attachmentRecords", "creatorLookup"):
         totals[key].update(summary.get(key) or {})
     totals["skippedOutOfScope"] += summary.get("skippedOutOfScope") or 0
 
@@ -446,7 +556,7 @@ def handler(event, context):
 
     per_region, scanned, failed = {}, [], {}
     totals = {"findings": Counter(), "timelines": Counter(), "reportOnly": Counter(), "tagCopy": Counter(),
-              "attachmentRecords": Counter(), "skippedOutOfScope": 0}
+              "attachmentRecords": Counter(), "creatorLookup": Counter(), "skippedOutOfScope": 0}
     for region in regions:
         (summary, err), seconds = results[region], durations.get(region, 0.0)
         if err is None:

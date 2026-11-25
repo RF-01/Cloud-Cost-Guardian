@@ -2,7 +2,7 @@
 
 One row per in-scope volume seen `in-use`: {volumeId, instanceId (first attachment), region, seenAt}. Overwritten
 on every scan and never deleted, so an orphaned volume keeps the last instance it was attached to (the creator
-lookup, #34, uses it).
+lookup, #34, reads it with `get`).
 """
 
 import os
@@ -29,3 +29,8 @@ def reset_clients():
 
 def put(volume_id, instance_id, region, seen_at):
     table().put_item(Item={"volumeId": volume_id, "instanceId": instance_id, "region": region, "seenAt": seen_at})
+
+
+def get(volume_id):
+    """The row for a volume, or None (read by the creator lookup, #34)."""
+    return table().get_item(Key={"volumeId": volume_id}).get("Item")

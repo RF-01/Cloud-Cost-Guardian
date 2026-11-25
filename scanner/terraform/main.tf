@@ -96,22 +96,46 @@ data "aws_iam_policy_document" "scanner" {
     resources = [var.table_arns["findings"]]
   }
 
-  # Audit entries only (common/audit.py, CONTRACT §3.3): finding_opened, and timeline_started / timeline_stopped
-  # written by common/timeline.py.
+  # Audit entries only (common/audit.py, CONTRACT §3.3): finding_opened, tags_copied, owner_found, and
+  # timeline_started / timeline_stopped written by common/timeline.py.
   statement {
     sid       = "WriteAudit"
     actions   = ["dynamodb:PutItem"]
     resources = [var.table_arns["audit"]]
   }
 
-  # Volume-attachments records (CONTRACT §3.5, task #33): one PutItem per in-use volume per scan.
+  # Volume-attachments records (CONTRACT §3.5, task #33): one PutItem per in-use volume per scan; GetItem by the
+  # creator lookup (#34) for the last instance an unattached volume was attached to.
   statement {
     sid       = "AttachmentRecords"
-    actions   = ["dynamodb:PutItem"]
+    actions   = ["dynamodb:PutItem", "dynamodb:GetItem"]
     resources = [var.table_arns["volume_attachments"]]
   }
 
-  # Tag copying (design §8.6, task #33): only owner / project, only on volumes and Elastic IPs of this account.
+  # Creator lookup results (CONTRACT §3.5, task #34).
+  statement {
+    sid       = "CreatorLookups"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    resources = [var.table_arns["creator_lookups"]]
+  }
+
+  # Creator lookup in CloudTrail event history (design §8.6, task #34). LookupEvents has no resource-level
+  # permissions, so the resource is "*".
+  statement {
+    sid       = "CloudTrailLookup"
+    actions   = ["cloudtrail:LookupEvents"]
+    resources = ["*"]
+  }
+
+  # The creating IAM user's `email` tag (CONTRACT §5).
+  statement {
+    sid       = "IamUserEmailTags"
+    actions   = ["iam:ListUserTags"]
+    resources = ["arn:aws:iam::${local.account_id}:user/*"]
+  }
+
+  # Tag copying (design §8.6, task #33) and the owner tag from the creator lookup (#34): only owner / project,
+  # only on volumes and Elastic IPs of this account.
   # In a personal stack only on resources tagged guardian:dev-scope = DEV_SCOPE (CONTRACT §6).
   statement {
     sid     = "CopyOwnerProjectTags"
@@ -124,6 +148,28 @@ data "aws_iam_policy_document" "scanner" {
       test     = "ForAllValues:StringEquals"
       variable = "aws:TagKeys"
       values   = ["owner", "project"]
+    }
+    dynamic "condition" {
+      for_each = var.dev_scope != "" ? [var.dev_scope] : []
+      content {
+        test     = "StringEquals"
+        variable = "ec2:ResourceTag/guardian:dev-scope"
+        values   = [condition.value]
+      }
+    }
+  }
+
+  # Owner tag from the creator lookup (design §8.6, task #34): only the owner key, only on instances of this
+  # account; in a personal stack only on resources tagged guardian:dev-scope = DEV_SCOPE (CONTRACT §6). Volumes and
+  # Elastic IPs are covered by CopyOwnerProjectTags above.
+  statement {
+    sid       = "SetInstanceOwnerTag"
+    actions   = ["ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*:${local.account_id}:instance/*"]
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = ["owner"]
     }
     dynamic "condition" {
       for_each = var.dev_scope != "" ? [var.dev_scope] : []
@@ -177,6 +223,7 @@ resource "aws_lambda_function" "scanner" {
       TABLE_FINDINGS              = var.table_names["findings"]
       TABLE_AUDIT                 = var.table_names["audit"]
       TABLE_VOLUME_ATTACHMENTS    = var.table_names["volume_attachments"]
+      TABLE_CREATOR_LOOKUPS       = var.table_names["creator_lookups"]
       DRY_RUN                     = tostring(var.dry_run)
       SCAN_REGIONS                = var.scan_regions
       DEV_SCOPE                   = var.dev_scope

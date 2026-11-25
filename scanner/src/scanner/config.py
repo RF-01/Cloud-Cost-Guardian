@@ -9,6 +9,9 @@ DEFAULT_DETECTION_WINDOW_MINUTES = idle.DEFAULT_DETECTION_WINDOW_MINUTES
 DEFAULT_EIP_STOPPED_THRESHOLD_HOURS = 24
 DEFAULT_REGION = "us-west-2"  # where the Guardian runs; DescribeRegions is called here, and the fallback region
 DEFAULT_MAX_WORKERS = 8
+# Creator lookup (design §8.6, CONTRACT §3.5, #34).
+UNKNOWN_RETRY_HOURS = 24  # an `unknown` creator-lookups record is looked up again after this
+MAX_LOOKUPS_PER_REGION = 20  # resources looked up in CloudTrail per region per scan; the rest wait
 
 
 def _int_env(name, default):
@@ -50,6 +53,10 @@ def dry_run():
 
 def table_volume_attachments():
     return os.environ["TABLE_VOLUME_ATTACHMENTS"]
+
+
+def table_creator_lookups():
+    return os.environ["TABLE_CREATOR_LOOKUPS"]
 
 
 def dev_scope():

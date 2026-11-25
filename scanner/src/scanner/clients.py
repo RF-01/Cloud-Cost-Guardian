@@ -19,7 +19,7 @@ from botocore.config import Config
 
 CONFIG = Config(connect_timeout=5, read_timeout=20, retries={"mode": "standard", "max_attempts": 4})
 
-SERVICES = ("ec2", "cloudwatch", "dynamodb")  # what a region worker uses (preloaded)
+SERVICES = ("ec2", "cloudwatch", "dynamodb", "cloudtrail", "iam")  # what a region worker uses (preloaded)
 
 _local = threading.local()
 _loader = botocore.loaders.create_loader()

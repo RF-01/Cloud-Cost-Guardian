@@ -8,14 +8,46 @@ import pytest
 from moto import mock_aws
 
 from common import audit, idle, timeline
-from scanner import attachments, config, findings, handler
+from scanner import attachments, clients, config, creator, findings, handler
 
 REGION = "us-west-2"
 TABLE = "cg-test-findings"
 AUDIT_TABLE = "cg-test-audit"
 ATTACH_TABLE = "cg-test-volume-attachments"
+CREATOR_TABLE = "cg-test-creator-lookups"
 SCOPE = "cg-dev-"
 OWNED = {"owner": "Alice@Example.com", "project": "demo", "Name": "web-1"}
+
+
+class FakeCloudTrail:
+    """LookupEvents by ResourceName only, newest first, paged by MaxResults (moto has no usable LookupEvents).
+    `add` events in time order (oldest first). `fail` = an exception every call raises."""
+
+    def __init__(self):
+        self.events = {}
+        self.calls = []
+        self.fail = None
+        self._lock = threading.Lock()
+
+    def add(self, resource_id, name, identity, request=None, error_code=None):
+        detail = {"eventName": name, "userIdentity": identity, "requestParameters": request or {}}
+        if error_code:
+            detail["errorCode"] = error_code
+        self.events.setdefault(resource_id, []).insert(0, {"EventName": name, "CloudTrailEvent": json.dumps(detail)})
+
+    def lookup_events(self, LookupAttributes, MaxResults=50, NextToken=None):
+        [attr] = LookupAttributes
+        assert attr["AttributeKey"] == "ResourceName"
+        with self._lock:
+            self.calls.append(attr["AttributeValue"])
+        if self.fail:
+            raise self.fail
+        events = self.events.get(attr["AttributeValue"], [])
+        start = int(NextToken or 0)
+        out = {"Events": events[start:start + MaxResults]}
+        if start + MaxResults < len(events):
+            out["NextToken"] = str(start + MaxResults)
+        return out
 
 
 @pytest.fixture
@@ -30,6 +62,7 @@ def aws(monkeypatch):
     monkeypatch.setenv("TABLE_FINDINGS", TABLE)
     monkeypatch.setenv("TABLE_AUDIT", AUDIT_TABLE)
     monkeypatch.setenv("TABLE_VOLUME_ATTACHMENTS", ATTACH_TABLE)
+    monkeypatch.setenv("TABLE_CREATOR_LOOKUPS", CREATOR_TABLE)
     monkeypatch.setenv("SCAN_REGIONS", REGION)
     monkeypatch.setenv("DRY_RUN", "true")
     with mock_aws():
@@ -47,18 +80,33 @@ def aws(monkeypatch):
             AttributeDefinitions=[{"AttributeName": "volumeId", "AttributeType": "S"}],
             BillingMode="PAY_PER_REQUEST",
         )
+        creator_table = boto3.resource("dynamodb", region_name=REGION).create_table(
+            TableName=CREATOR_TABLE, KeySchema=[{"AttributeName": "resourceId", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "resourceId", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
         findings.reset_clients()
         timeline.reset_clients()
         audit.reset_clients()
         attachments.reset_clients()
+        creator.reset_clients()
+        # CloudTrail: a fake (no events unless a test adds them); every other service is moto.
+        cloudtrail = FakeCloudTrail()
+        real_client = clients.client
+        monkeypatch.setattr(clients, "client", lambda service, region: cloudtrail if service == "cloudtrail"
+                            else real_client(service, region))
+        sleeps = []
+        monkeypatch.setattr(creator, "_pause", sleeps.append)  # no real pauses between LookupEvents calls
         ec2 = boto3.client("ec2", region_name=REGION)
         yield {"table": table, "ec2": ec2, "cw": boto3.client("cloudwatch", region_name=REGION),
-               "audit": audit_table, "attachments": attach_table,
+               "audit": audit_table, "attachments": attach_table, "creator": creator_table,
+               "cloudtrail": cloudtrail, "sleeps": sleeps,
                "ami": ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]}
         findings.reset_clients()
         timeline.reset_clients()
         audit.reset_clients()
         attachments.reset_clients()
+        creator.reset_clients()
 
 
 def create_audit_table():
@@ -630,7 +678,7 @@ def stub_scan(monkeypatch, fail=()):
             raise RuntimeError(f"boom in {region}")
         return {"region": region, "findings": {"EBS_UNATTACHED": 1}, "timelines": {"started": 1},
                 "skippedOutOfScope": 2, "reportOnly": {}, "tagCopy": {"copied": 1, "would_copy": 2},
-                "attachmentRecords": {"written": 3}}
+                "attachmentRecords": {"written": 3}, "creatorLookup": {"found": 1, "skipped_cap": 2}}
 
     monkeypatch.setattr(handler, "scan_region", fake)
     return seen
@@ -722,7 +770,8 @@ def test_one_failing_region_does_not_stop_the_others(aws, monkeypatch, capsys):
     assert summary["regions"]["us-west-2"]["status"] == "ok"
     assert summary["totals"] == {"findings": {"EBS_UNATTACHED": 2}, "timelines": {"started": 2},
                                  "reportOnly": {}, "tagCopy": {"copied": 2, "would_copy": 4},
-                                 "attachmentRecords": {"written": 6}, "skippedOutOfScope": 4}
+                                 "attachmentRecords": {"written": 6},
+                                 "creatorLookup": {"found": 2, "skipped_cap": 4}, "skippedOutOfScope": 4}
     assert summary["slowestRegion"]["region"] in seen and summary["durationSeconds"] >= 0
     entries = logs(capsys)
     assert any(e["action"] == "scan_region" and e["region"] == "eu-west-1" and e["errorType"] == "RuntimeError"
