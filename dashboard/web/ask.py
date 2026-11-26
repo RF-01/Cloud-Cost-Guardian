@@ -53,8 +53,15 @@ SYSTEM_PROMPT = (
     "cost before credits, per day; finding amounts are the Guardian's estimates per month; budget amounts are usage "
     "before credits for the budget period. Rows with \"sample\": true are demo data, not real; if you use them, say "
     "they are sample data. You cannot take actions: you cannot stop, delete, protect, postpone, restore or change "
-    "anything (owners act through the links in the Guardian's emails). Answer in plain text without markdown, in "
-    "at most about 150 words."
+    "anything (owners act through the links in the Guardian's emails). "
+    "Only findings with status open, in_progress or failed are current waste; their total is "
+    "totals.activeEstimatedMonthlyWaste. Never call a remediated, resolved or report-only protected finding "
+    "wasting. A remediated finding was already handled by the Guardian: if dryRun is true, the action was only "
+    "simulated, the resource is still running and its estimatedMonthlyCost is a potential saving, not current "
+    "waste; if dryRun is false, realizedMonthlySavings is the saving. Say which status a finding has when you "
+    "mention it. "
+    "Answer in plain text only: no markdown, no backticks, no asterisks, no bullet characters; write resource IDs "
+    "as plain words. Use at most about 150 words."
 )
 
 
