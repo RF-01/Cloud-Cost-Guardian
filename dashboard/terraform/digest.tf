@@ -9,6 +9,11 @@ locals {
   # authorized on the profile AND on the foundation model in the region that serves the request.
   bedrock_profile_regions = ["us-east-1", "us-east-2", "us-west-2"]
   bedrock_foundation_id   = trimprefix(var.bedrock_model_id, "us.")
+  # Shared by the digest role and the dashboard instance role (web.tf, #43): the profile + its foundation models.
+  bedrock_invoke_arns = concat(
+    ["arn:aws:bedrock:us-west-2:${local.account_id}:inference-profile/${var.bedrock_model_id}"],
+    [for r in local.bedrock_profile_regions : "arn:aws:bedrock:${r}::foundation-model/${local.bedrock_foundation_id}"],
+  )
 }
 
 # Zip layout: handler.py (handler handler.handler) + common/*.py.
@@ -68,12 +73,9 @@ data "aws_iam_policy_document" "digest" {
 
   # The configured inference profile only, plus the foundation model it routes to.
   statement {
-    sid     = "InvokeConfiguredModel"
-    actions = ["bedrock:InvokeModel"]
-    resources = concat(
-      ["arn:aws:bedrock:us-west-2:${local.account_id}:inference-profile/${var.bedrock_model_id}"],
-      [for r in local.bedrock_profile_regions : "arn:aws:bedrock:${r}::foundation-model/${local.bedrock_foundation_id}"],
-    )
+    sid       = "InvokeConfiguredModel"
+    actions   = ["bedrock:InvokeModel"]
+    resources = local.bedrock_invoke_arns
   }
 
   # Failed async invocations go to the DLQ (design §6.1). AWS checks this permission when the DLQ is set,

@@ -49,7 +49,9 @@ class CountingClient:
 
 def make(secret, fail=False):
     client = CountingClient(boto3.client("dynamodb", region_name=REGION), fail=fail)
-    app = create_app(store=Store(NAMES, client=client, workers=1), name_prefix=PREFIX, origin_secret=secret)
+    budgets = CountingClient(boto3.client("budgets", region_name="us-east-1"), fail=fail)  # budget status (#43)
+    store = Store(NAMES, client=client, workers=1, budgets_client=budgets)
+    app = create_app(store=store, name_prefix=PREFIX, origin_secret=secret)
     return app, client
 
 
@@ -157,7 +159,8 @@ def test_secret_never_logged(aws, capsys):
 def test_warm_cache_loads_everything_once(aws, capsys):
     app, client = make("")
     assert app.extensions["guardian_warm_cache"]() == {
-        "findings": "ok", "summaries": "ok", "activity": "ok", "bill": "ok", "budgets": "ok"}
+        "findings": "ok", "summaries": "ok", "activity": "ok", "bill": "ok", "budgets": "ok",
+        "budgetStatus": "ok"}
     warmed = len(client.calls)
     assert {"scan", "query", "batch_get_item"} <= set(client.calls)
     assert app.test_client().get("/").status_code == 200

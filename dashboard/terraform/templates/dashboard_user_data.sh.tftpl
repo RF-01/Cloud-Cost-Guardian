@@ -76,7 +76,11 @@ Environment=PORT=80
 Environment=THREADS=8
 Environment=AWS_REGION=${region}
 Environment=NAME_PREFIX=${name_prefix}
+Environment=ACCOUNT_ID=${account_id}
 %{ for k, v in table_env ~}
+Environment=${k}=${v}
+%{ endfor ~}
+%{ for k, v in ask_env ~}
 Environment=${k}=${v}
 %{ endfor ~}
 Environment=REQUIRE_ORIGIN_SECRET=1

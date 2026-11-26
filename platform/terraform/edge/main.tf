@@ -1,7 +1,9 @@
 # CloudFront in front of the dashboard instance (task #38, design §6.4):
 #   Browser --HTTPS--> CloudFront --(basic auth function, viewer request)--HTTP + X-Origin-Verify--> EC2:80
-# Caching disabled; the origin request policy forwards only CloudFront-Viewer-Address (for #43's per-visitor
-# rate limit) and the query string. The viewer's Authorization header and cookies never reach the instance.
+# Caching disabled; the origin request policy forwards only CloudFront-Viewer-Address (the per-visitor rate
+# limit), Content-Type and X-Requested-With (the Ask box's JSON body and CSRF check, #43) and the query string.
+# The viewer's Authorization header and cookies never reach the instance. The origin read timeout stays at its
+# default, 30 s: the Ask request is kept under it (CONTRACT §4.11).
 
 locals {
   dashboard_name = "${var.name_prefix}dashboard"
@@ -26,12 +28,12 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
 
 resource "aws_cloudfront_origin_request_policy" "dashboard" {
   name    = local.dashboard_name
-  comment = "Dashboard: viewer address (rate limit) and query strings; no cookies"
+  comment = "Dashboard: viewer address (rate limit), Ask box headers, query strings; no cookies"
 
   headers_config {
     header_behavior = "whitelist"
     headers {
-      items = ["CloudFront-Viewer-Address"]
+      items = ["CloudFront-Viewer-Address", "Content-Type", "X-Requested-With"]
     }
   }
 

@@ -137,7 +137,8 @@ def test_healthz_makes_no_aws_calls():
     class Exploding:
         def __getattr__(self, name):
             raise AssertionError(f"healthz touched DynamoDB ({name})")
-    app = create_app(store=Store(NAMES, client=Exploding()), now=lambda: NOW, name_prefix=PREFIX)
+    store = Store(NAMES, client=Exploding(), budgets_client=Exploding(), account_id="123456789012")
+    app = create_app(store=store, now=lambda: NOW, name_prefix=PREFIX)
     resp = app.test_client().get("/healthz")
     assert resp.status_code == 200 and resp.get_json() == {"status": "ok"}
 
@@ -402,7 +403,8 @@ def test_dynamo_error_gives_502_json_and_page_still_renders():
             def call(**_):
                 raise RuntimeError("AccessDenied")
             return call
-    app = create_app(store=Store(NAMES, client=Failing()), now=lambda: NOW, name_prefix=PREFIX)
+    store = Store(NAMES, client=Failing(), budgets_client=Failing(), account_id="123456789012")
+    app = create_app(store=store, now=lambda: NOW, name_prefix=PREFIX)
     c = app.test_client()
     resp = c.get("/api/findings")
     assert resp.status_code == 502 and resp.get_json() == {"error": "data_unavailable"}

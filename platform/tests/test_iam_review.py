@@ -357,14 +357,145 @@ def test_w5_logs_beyond_own_group():
 
 def test_w4_dashboard_scope():
     roles = base_roles()
-    roles["dashboard"] = (trust("ec2.amazonaws.com"), policy(
-        allow("SSM", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCT}:parameter/*"),
-        allow("S3", "s3:GetObject", f"arn:aws:s3:::{PREFIX}dashboard-artifacts-{ACCT}/dashboard-web/*"),
-        allow("KMS", "kms:Decrypt", f"arn:aws:kms:{REGION}:{ACCT}:key/abc")))
+    doc = good_dashboard()
+    doc["Statement"] = [x for x in doc["Statement"] if x["Sid"] not in ("GetOriginSecret",)]
+    doc["Statement"] += [allow("SSM", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCT}:parameter/*"),
+                         allow("KMS", "kms:Decrypt", f"arn:aws:kms:{REGION}:{ACCT}:key/abc")]
+    roles["dashboard"] = (trust("ec2.amazonaws.com"), doc)
     rv = review(roles)
     sids = {i.sid for i in rv.warnings if i.rule == "W4"}
     assert sids == {"SSM", "KMS"}
-    assert any(i.sid == "S3" for i in rv.info)
+    assert any(i.sid == "GetDashboardArtifact" for i in rv.info)
+
+
+# ---------------------------------------------------------------- dashboard (#43)
+
+DASH_MODEL = "us.amazon.nova-2-lite-v1:0"
+COUNTER_CONDITIONS = {
+    "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["bedrock#*"]},
+    "ForAllValues:StringEquals": {"dynamodb:Attributes": ["counterId", "count", "ttl"]},
+    "Null": {"dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false"},
+    "StringEqualsIfExists": {"dynamodb:ReturnValues": ["NONE", "UPDATED_NEW"]},
+}
+
+
+def good_dashboard():
+    """Mirrors dashboard/terraform/web.tf (the instance role) after #43."""
+    fm = [f"arn:aws:bedrock:{r}::foundation-model/amazon.nova-2-lite-v1:0"
+          for r in ("us-east-1", "us-east-2", "us-west-2")]
+    return policy(
+        allow("ScanFindings", "dynamodb:Scan", TABLE + "findings"),
+        allow("QueryAuditByDay", "dynamodb:Query", TABLE + "audit/index/byDay"),
+        allow("BatchGetDailySummaries", "dynamodb:BatchGetItem", TABLE + "daily-summaries"),
+        allow("QueryBillHistory", "dynamodb:Query", TABLE + "bill-history"),
+        allow("ScanBudgetAlerts", "dynamodb:Scan", TABLE + "budget-alerts"),
+        allow("UpdateBedrockCounter", "dynamodb:UpdateItem", TABLE + "counters", copy.deepcopy(COUNTER_CONDITIONS)),
+        allow("InvokeConfiguredModel", "bedrock:InvokeModel",
+              [f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{DASH_MODEL}"] + fm),
+        allow("ViewBudgets", "budgets:ViewBudget", f"arn:aws:budgets::{ACCT}:budget/*"),
+        allow("GetDashboardArtifact", "s3:GetObject", f"arn:aws:s3:::{PREFIX}dashboard-artifacts-{ACCT}/dashboard-web/*"),
+        allow("GetOriginSecret", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCT}:parameter/{PREFIX}dashboard/origin-secret"),
+    )
+
+
+def dash_review(doc):
+    return review({**base_roles(), "dashboard": (trust("ec2.amazonaws.com"), doc)})
+
+
+def test_w4_good_dashboard_policy_is_clean():
+    rv = dash_review(good_dashboard())
+    assert [(i.rule, i.sid, i.message) for i in rv.hard + rv.warnings if i.role == "dashboard"] == []
+    info = " | ".join(i.message for i in rv.info if i.role == "dashboard")
+    assert "bedrock:InvokeModel limited to the configured profile" in info
+    assert f"budgets:ViewBudget limited to arn:aws:budgets::{ACCT}:budget/*" in info
+    assert "No bedrock:InvokeModel yet" not in info
+
+
+def test_dashboard_design_note_mentions_43():
+    note = ir.DESIGN_NOTES["dashboard"]
+    assert "#43" in note and "bedrock#*" in note and "budgets:ViewBudget" in note and "yet" not in note
+
+
+@pytest.mark.parametrize("drop,needle", [
+    ("InvokeConfiguredModel", "No bedrock:InvokeModel"),
+    ("ViewBudgets", "No budgets:ViewBudget"),
+    ("UpdateBedrockCounter", "No UpdateItem on counters"),
+])
+def test_w4_dashboard_missing_parts_warn(drop, needle):
+    doc = good_dashboard()
+    doc["Statement"] = [x for x in doc["Statement"] if x["Sid"] != drop]
+    msgs = [i.message for i in dash_review(doc).warnings if i.rule == "W4"]
+    assert any(needle in m for m in msgs), msgs
+
+
+def _without(conditions, op, key):
+    out = copy.deepcopy(conditions)
+    del out[op][key]
+    return {k: v for k, v in out.items() if v}
+
+
+@pytest.mark.parametrize("stmt,needle", [
+    (allow("X", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}::foundation-model/amazon.nova-pro-v1:0"),
+     "beyond the configured profile"),
+    (allow("X", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/*"),
+     "beyond the configured profile"),
+    (allow("X", "bedrock:InvokeModelWithResponseStream",
+           f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{DASH_MODEL}"), "besides InvokeModel"),
+    (allow("X", "budgets:ModifyBudget", f"arn:aws:budgets::{ACCT}:budget/*"), "besides ViewBudget"),
+    (allow("X", "budgets:ViewBudget", "arn:aws:budgets::999999999999:budget/*"), "beyond this account's budgets"),
+    (allow("X", "dynamodb:PutItem", TABLE + "counters"), "beyond UpdateItem on counters"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "findings", copy.deepcopy(COUNTER_CONDITIONS)),
+     "beyond UpdateItem on counters"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "counters",
+           _without(COUNTER_CONDITIONS, "Null", "dynamodb:LeadingKeys")), "dynamodb:LeadingKeys without a Null guard"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "counters",
+           _without(COUNTER_CONDITIONS, "Null", "dynamodb:Attributes")), "dynamodb:Attributes without a Null guard"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "counters",
+           _without(COUNTER_CONDITIONS, "ForAllValues:StringLike", "dynamodb:LeadingKeys")),
+     "without dynamodb:LeadingKeys"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "counters",
+           _without(COUNTER_CONDITIONS, "ForAllValues:StringEquals", "dynamodb:Attributes")),
+     "without dynamodb:Attributes"),
+    (allow("X", "dynamodb:UpdateItem", TABLE + "counters",
+           {**copy.deepcopy(COUNTER_CONDITIONS),
+            "ForAllValues:StringEquals": {"dynamodb:Attributes": ["counterId", "count", "ttl", "foo"]}}),
+     "dynamodb:Attributes condition is"),
+])
+def test_w4_dashboard_scope_warnings(stmt, needle):
+    doc = good_dashboard()
+    doc["Statement"].append(stmt)
+    rv = dash_review(doc)
+    w4 = [i for i in rv.warnings if i.rule == "W4" and i.role == "dashboard"]
+    assert w4 and any(needle in i.message for i in w4), [i.message for i in rv.warnings]
+    assert all(i.sid == "X" for i in w4)
+
+
+def test_w4_budgets_star_is_a_hard_failure_too():
+    doc = good_dashboard()
+    doc["Statement"].append(allow("X", "budgets:ViewBudget", "*"))
+    rv = dash_review(doc)
+    assert "H7" in rules(rv.hard, "dashboard")
+    assert any(i.sid == "X" and "beyond this account's budgets" in i.message for i in rv.warnings)
+
+
+def test_sim_cases_for_dashboard():
+    cases = {c.label: c for c in ir.sim_cases(PREFIX, ACCT, REGION, PREFIX, DASH_MODEL) if c.role == "dashboard"}
+    profile = cases[f"bedrock:InvokeModel on configured profile {DASH_MODEL}"]
+    assert profile.expect == ir.ALLOWED
+    assert profile.resource == f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{DASH_MODEL}"
+    assert cases["bedrock:InvokeModel on amazon.nova-pro-v1:0"].expect == ir.DENIED
+    ok = cases["UpdateItem counters [bedrock#2026-11-26] attributes [count, ttl]"]
+    assert ok.expect == ir.ALLOWED and ok.resource == TABLE + "counters"
+    assert ok.context["dynamodb:LeadingKeys"] == ["bedrock#2026-11-26"]
+    assert ok.context["dynamodb:Attributes"] == ["count", "ttl"]
+    for label in ("UpdateItem counters [other#x] attributes [count, ttl]",
+                  "UpdateItem counters [bedrock#2026-11-26] attributes [foo]",
+                  "UpdateItem counters, no LeadingKeys / Attributes keys", "PutItem counters",
+                  f"budgets:ModifyBudget on {PREFIX}account-monthly", "PutItem findings", "UpdateItem findings"):
+        assert cases[label].expect == ir.DENIED, label
+    view = cases[f"budgets:ViewBudget on {PREFIX}account-monthly"]
+    assert view.expect == ir.ALLOWED and view.resource == f"arn:aws:budgets::{ACCT}:budget/{PREFIX}account-monthly"
+    assert all(c.expect is not ir.INFO for c in cases.values())
 
 
 @pytest.mark.parametrize("cond,warns", [

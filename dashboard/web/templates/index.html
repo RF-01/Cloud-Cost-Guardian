@@ -35,6 +35,29 @@
   {% endif %}
 </section>
 
+{# ------------------------------------------------------------------ ask (#43) #}
+<section aria-labelledby="ask-h" id="ask">
+  <h2 id="ask-h">Ask about my costs <span class="unit">Amazon Bedrock</span></h2>
+  <p class="meta">Answers come only from this stack's data (findings, daily summaries, the bill, activity counts and budgets). Up to {{ ask.daily_cap }} questions per day for the whole dashboard and {{ ask.per_visitor_per_hour }} per visitor per hour. The assistant cannot change anything.</p>
+  <noscript><p class="empty">The Ask box needs JavaScript.</p></noscript>
+  <form class="ask-form" id="ask-form" novalidate>
+    <label for="ask-question">Your question</label>
+    <textarea id="ask-question" name="question" rows="3" maxlength="{{ ask.max_question_chars }}" required placeholder="Which idle resources cost the most, and when will they be stopped?"></textarea>
+    <div class="ask-row">
+      <span class="meta" id="ask-count" aria-live="polite">0 / {{ ask.max_question_chars }}</span>
+      <button type="submit" id="ask-button">Ask</button>
+    </div>
+  </form>
+  <p class="ask-status" id="ask-status" role="status" aria-live="polite" hidden></p>
+  <div class="ask-result" id="ask-result" hidden>
+    <p class="ask-label">Your question</p>
+    <p class="ask-question" id="ask-asked"></p>
+    <p class="ask-label">AI answer (Amazon Bedrock) — may be wrong; check the numbers on this page</p>
+    <p class="ask-answer" id="ask-answer"></p>
+  </div>
+  <p class="meta" id="ask-remaining" aria-live="polite"></p>
+</section>
+
 {# ------------------------------------------------------------------ charts #}
 <section aria-labelledby="trend-h">
   <div class="section-head">
@@ -230,6 +253,28 @@
 </section>
 
 {# ------------------------------------------------------------------ budgets #}
+<section aria-labelledby="budget-status-h">
+  <h2 id="budget-status-h">Budget status <span class="unit">AWS Budgets, {{ budget_status_note }}</span></h2>
+  {% if budget_status_error %}
+    <p class="error">{{ budget_status_error }}</p>
+  {% elif not budget_status %}
+    <p class="empty">No budgets in this stack.</p>
+  {% else %}
+  <div class="tiles budget-cards">
+    {% for b in budget_status %}
+    <div class="tile budget-card">
+      <span class="tile-label">{{ b.name }}</span>
+      <span class="tile-value">{{ b.actual|usd }} <span class="tile-unit">of {{ b.limit|usd }}{% if b.percent is not none %} ({{ "%.1f"|format(b.percent) }} %){% endif %}</span></span>
+      {% if b.percent is not none %}<meter min="0" max="100" low="80" high="100" optimum="0" value="{{ [b.percent, 100]|min }}" aria-label="{{ b.name }} spent, percent of limit">{{ b.percent }} %</meter>{% endif %}
+      <span class="tile-unit">Forecast: {% if b.forecast is not none %}{{ b.forecast|usd }}{% if b.forecastPercent is not none %} ({{ "%.1f"|format(b.forecastPercent) }} %){% endif %}{% else %}not available yet{% endif %}</span>
+      <span class="tile-unit">{{ (b.timeUnit or "")|lower }} period {{ (b.periodStart or "")[:10] }} to {{ (b.periodEnd or "")[:10] }}{% if b.lastUpdated %} · updated {{ b.lastUpdated|utc }}{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="meta">Amounts are {{ budget_status_note }} ({{ budget_status[0].unit }}), as AWS Budgets computes them; AWS refreshes them a few times a day.</p>
+  {% endif %}
+</section>
+
 <section aria-labelledby="budget-h">
   <h2 id="budget-h">Budget alerts <span class="unit">newest 20</span></h2>
   {% if budgets_error %}

@@ -348,6 +348,54 @@ def budgets_view(alerts):
              "message": a.get("message"), "day": a.get("day")} for a in newest]
 
 
+BUDGET_STATUS_NOTE = "usage before credits"
+
+
+def _money(spend):
+    """{"amount": "1.5", "unit": "USD"} -> 1.5 (unrounded), None if absent or unreadable."""
+    if not isinstance(spend, dict):
+        return None
+    try:
+        value = float(spend.get("amount"))
+    except (TypeError, ValueError):
+        return None
+    return value if value == value else None   # NaN -> None
+
+
+def _round2(value):
+    return round(value, 2) if value is not None else None
+
+
+def budget_status_view(budgets, prefix):
+    """This stack's budgets only (name starts with NAME_PREFIX), by name. Amounts in USD, percent of the limit."""
+    if not prefix:
+        return []
+    out = []
+    for b in budgets:
+        name = b.get("name")
+        if not isinstance(name, str) or not name.startswith(prefix):
+            continue
+        limit, actual, forecast = _money(b.get("limit")), _money(b.get("actual")), _money(b.get("forecast"))
+
+        def pct(value):
+            return round(value / limit * 100, 1) if value is not None and limit else None
+
+        out.append({
+            "name": name,
+            "unit": (b.get("limit") or {}).get("unit") or "USD",
+            "timeUnit": b.get("timeUnit"),
+            "limit": _round2(limit),
+            "actual": _round2(actual),
+            "forecast": _round2(forecast),
+            "percent": pct(actual),
+            "forecastPercent": pct(forecast),
+            "periodStart": b.get("periodStart"),
+            "periodEnd": b.get("periodEnd"),
+            "lastUpdated": b.get("lastUpdated"),
+        })
+    return sorted(out, key=lambda x: x["name"])
+
+
 def today_of(now):
     return now.astimezone(timezone.utc).date()
 

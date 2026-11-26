@@ -126,8 +126,10 @@ resource "aws_iam_role" "dashboard" {
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
-# Exactly the allowlist in dashboard/web/README.md (enforced at runtime by store.ReadOnlyDynamo), plus the
-# artifact download and the origin secret. No writes. Bedrock and the counters table come with #43.
+# Exactly the allowlist in dashboard/web/README.md (reads enforced at runtime by store.ReadOnlyDynamo), plus the
+# artifact download and the origin secret. Bedrock and the counters table come with #43 (Ask box, CONTRACT
+# §4.11): InvokeModel on the configured profile only, one conditional UpdateItem on bedrock#* counters (the
+# dashboard's only write), and budgets:ViewBudget for the budget status.
 data "aws_iam_policy_document" "dashboard" {
   statement {
     sid       = "ScanFindings"
@@ -157,6 +159,57 @@ data "aws_iam_policy_document" "dashboard" {
     sid       = "ScanBudgetAlerts"
     actions   = ["dynamodb:Scan"]
     resources = [var.table_arns["budget_alerts"]]
+  }
+
+  # Ask box daily cap: UpdateItem on keys bedrock#<day> touching only counterId / count / ttl. ForAllValues
+  # alone passes a request without the key, hence the Null guards. UPDATED_NEW returns only count / ttl.
+  statement {
+    sid       = "UpdateBedrockCounter"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [var.table_arns["counters"]]
+
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["bedrock#*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:Attributes"
+      values   = ["counterId", "count", "ttl"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:Attributes"
+      values   = ["false"]
+    }
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "dynamodb:ReturnValues"
+      values   = ["NONE", "UPDATED_NEW"]
+    }
+  }
+
+  # Ask box: the configured inference profile and the foundation model it routes to (same ARNs as the digest).
+  statement {
+    sid       = "InvokeConfiguredModel"
+    actions   = ["bedrock:InvokeModel"]
+    resources = local.bedrock_invoke_arns
+  }
+
+  # Budget status (DescribeBudgets -> budgets:ViewBudget, resource type budget). DescribeBudgets takes only the
+  # account ID and names no budget, so a grant on budget/<prefix>* cannot be relied on to authorize it. This
+  # account's budget/* is the narrowest resource that surely works (never "*"). Read only; the app shows only
+  # budgets named <prefix>*.
+  statement {
+    sid       = "ViewBudgets"
+    actions   = ["budgets:ViewBudget"]
+    resources = ["arn:aws:budgets::${local.account_id}:budget/*"]
   }
 
   statement {
@@ -275,9 +328,19 @@ resource "aws_instance" "dashboard" {
     # instance is replaced in the same apply (the service reads the value only at start).
     origin_secret_version = aws_ssm_parameter.origin_secret.version
     name_prefix           = var.name_prefix
+    account_id            = local.account_id
     table_env             = { for k, v in var.table_names : "TABLE_${upper(k)}" => v }
-    web_root              = "/opt/guardian-dashboard"
-    origin_script         = "/usr/local/libexec/guardian-dashboard-origin-env"
+    # Ask box (#43, CONTRACT §4.11 / §6)
+    ask_env = {
+      BEDROCK_MODEL_ID           = var.bedrock_model_id
+      BEDROCK_MAX_TOKENS         = tostring(var.bedrock_max_tokens)
+      BEDROCK_DAILY_CAP          = tostring(var.bedrock_daily_cap)
+      BEDROCK_MAX_QUESTION_CHARS = tostring(var.bedrock_max_question_chars)
+      RATE_LIMIT_PER_MINUTE      = "60"
+      ASK_PER_VISITOR_PER_HOUR   = "10"
+    }
+    web_root      = "/opt/guardian-dashboard"
+    origin_script = "/usr/local/libexec/guardian-dashboard-origin-env"
   })
   user_data_replace_on_change = true
 

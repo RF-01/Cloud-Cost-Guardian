@@ -104,8 +104,12 @@ DESIGN_NOTES = {
               "invokes only Notify; bedrock:InvokeModel only on the configured inference profile and its "
               "foundation model in the profile's US regions; DLQ SendMessage (CONTRACT §4.10, #42).",
     "budget-subscriber": "PutItem on budget-alerts only; DLQ SendMessage (not in §16.1).",
-    "dashboard": "Read-only DynamoDB; no Bedrock and no counters write yet (#43); adds s3:GetObject on its artifact "
-                 "prefix and ssm:GetParameter on its origin-secret parameter.",
+    "dashboard": "DynamoDB reads plus one write: UpdateItem on counters limited to LeadingKeys bedrock#* and "
+                 "Attributes counterId / count / ttl (Null guards; the Ask box daily cap, #43); bedrock:InvokeModel "
+                 "only on the configured inference profile and its foundation model (same ARNs as the digest); "
+                 "budgets:ViewBudget on the account's budget/* (DescribeBudgets names no budget, so a <prefix>* "
+                 "resource cannot be relied on; not in §16.1); adds s3:GetObject on its artifact prefix and "
+                 "ssm:GetParameter on its origin-secret parameter.",
     "scheduler": "Not in design §16.1 (CONTRACT §8, #37): invokes exactly the scheduled functions, DLQ SendMessage.",
 }
 
@@ -461,7 +465,8 @@ def warn_logs(rv, role, stmts):
 
 def warn_dashboard_scope(rv, roles):
     stmts = roles.get("dashboard", {}).get("statements") or []
-    seen = {"kms": [], "ssm": [], "s3": [], "bedrock": []}
+    deployed = "dashboard" in roles
+    seen = {"kms": [], "ssm": [], "s3": [], "bedrock": [], "budgets": []}
     for s in stmts:
         if not s.allow:
             continue
@@ -490,9 +495,90 @@ def warn_dashboard_scope(rv, roles):
     else:
         rv.flag("info", "W4", "dashboard", "-", "No KMS permission: the SecureString uses aws/ssm, whose key policy "
                 "allows decrypt via SSM for principals of the account (kms:ViaService).")
-    if not seen["bedrock"]:
-        rv.flag("info", "W4", "dashboard", "-", "No bedrock:InvokeModel yet (#43): 'one model only' cannot be "
-                "checked until then.")
+    _dashboard_bedrock(rv, seen["bedrock"], deployed)
+    _dashboard_budgets(rv, seen["budgets"], deployed)
+    _dashboard_counters(rv, [s for s in stmts if s.allow], deployed)
+
+
+def _dashboard_bedrock(rv, grants, deployed):
+    """W4: the Ask box invokes one inference profile and its foundation model only (CONTRACT §4.11)."""
+    models = bedrock_allowed_arns(rv)
+    for sid, a, res in grants:
+        if a.lower() != "bedrock:invokemodel":
+            rv.flag("warn", "W4", "dashboard", sid, f"Bedrock action besides InvokeModel: {a}.",
+                    "bedrock:InvokeModel only (Converse is authorized by InvokeModel).")
+            continue
+        bad = [r for r in res if not _arn_allowed(r, models)]
+        if bad:
+            rv.flag("warn", "W4", "dashboard", sid, f"bedrock:InvokeModel beyond the configured profile "
+                    f"{rv.bedrock_model_id}: {', '.join(bad)}.", f"Resource = {models[0]} and "
+                    f"{models[1].replace(':*:', ':<region>:')} for the profile's regions only.")
+        else:
+            rv.flag("info", "W4", "dashboard", sid, f"bedrock:InvokeModel limited to the configured profile "
+                    f"{rv.bedrock_model_id} and its foundation model.")
+    if deployed and not any(a.lower() == "bedrock:invokemodel" for _, a, _ in grants):
+        rv.flag("warn", "W4", "dashboard", "-", "No bedrock:InvokeModel: the Ask box cannot answer (#43).",
+                f"Allow bedrock:InvokeModel on {models[0]} and its foundation model.")
+
+
+def _dashboard_budgets(rv, grants, deployed):
+    """W4: budget status is read only: budgets:ViewBudget on this account's budgets, nothing else."""
+    own = f"arn:aws:budgets::{rv.account}:budget/"
+    for sid, a, res in grants:
+        if a.lower() != "budgets:viewbudget":
+            rv.flag("warn", "W4", "dashboard", sid, f"Budgets action besides ViewBudget: {a}.",
+                    "budgets:ViewBudget only (the dashboard never changes budgets).")
+            continue
+        bad = [r for r in res if not r.startswith(own)]
+        if bad:
+            rv.flag("warn", "W4", "dashboard", sid, f"budgets:ViewBudget beyond this account's budgets: "
+                    f"{', '.join(bad)}.", f"Resource = {own}* (or {own}{rv.prefix}*).")
+        else:
+            rv.flag("info", "W4", "dashboard", sid, f"budgets:ViewBudget limited to {', '.join(res)}.")
+    if deployed and not any(a.lower() == "budgets:viewbudget" for _, a, _ in grants):
+        rv.flag("warn", "W4", "dashboard", "-", "No budgets:ViewBudget: the budget status card cannot load (#43).",
+                f"Allow budgets:ViewBudget on {own}*.")
+
+
+def _dashboard_counters(rv, stmts, deployed):
+    """W4: the dashboard's only DynamoDB write is UpdateItem on counters, LeadingKeys bedrock#* and Attributes
+    counterId / count / ttl, each ForAllValues key with a Null guard."""
+    counters = f"arn:aws:dynamodb:{rv.region}:{rv.account}:table/{rv.prefix}counters"
+    found = False
+    for s in stmts:
+        writes = [w for w in DYNAMODB_WRITES if action_matches(s, w)]
+        if not writes:
+            continue
+        if writes != ["dynamodb:UpdateItem"] or s.resources != [counters]:
+            rv.flag("warn", "W4", "dashboard", s.sid, f"DynamoDB writes beyond UpdateItem on counters: "
+                    f"{', '.join(writes)} on {', '.join(s.resources)}.",
+                    f"dynamodb:UpdateItem on {counters} only.")
+            continue
+        found = True
+        # condition_keys() keeps one operator per key; here a key has two (ForAllValues... and Null).
+        keys = {k.lower(): (op, as_list(v)) for op, block in s.conditions.items() if op != "Null"
+                for k, v in block.items()}
+        null_keys = {k.lower() for o, b in s.conditions.items() if o == "Null" for k, v in b.items()
+                     if [str(x).lower() for x in as_list(v)] == ["false"]}
+        expect = {"dynamodb:leadingkeys": ("ForAllValues:StringLike", {"bedrock#*"}),
+                  "dynamodb:attributes": ("ForAllValues:StringEquals", {"counterId", "count", "ttl"})}
+        for key, (op, values) in expect.items():
+            name = "dynamodb:LeadingKeys" if key == "dynamodb:leadingkeys" else "dynamodb:Attributes"
+            got = keys.get(key)
+            if got is None:
+                rv.flag("warn", "W4", "dashboard", s.sid, f"UpdateItem on counters without {name}.",
+                        f"Add condition {op} {name} = {', '.join(sorted(values))} (+ Null guard).")
+                continue
+            if not got[0].startswith("ForAllValues") or not set(map(str, got[1])) <= values:
+                rv.flag("warn", "W4", "dashboard", s.sid, f"{name} condition is {got[0]} "
+                        f"{', '.join(map(str, got[1]))}.", f"{op} {name} = {', '.join(sorted(values))}.")
+            if key not in null_keys:
+                rv.flag("warn", "W4", "dashboard", s.sid, f"{got[0]} {name} without a Null guard: a request "
+                        "without the key passes vacuously.", f"Add condition Null {name} = false.")
+    if deployed and not found:
+        rv.flag("warn", "W4", "dashboard", "-", "No UpdateItem on counters: the Ask box daily cap cannot be "
+                "reserved (#43).", f"Allow dynamodb:UpdateItem on {counters} with LeadingKeys bedrock#* and "
+                "Attributes counterId / count / ttl.")
 
 
 # Geo prefixes of Bedrock cross-region inference profile IDs (profile "us.<model>" -> foundation model "<model>").
@@ -950,10 +1036,27 @@ def sim_cases(prefix, account, region, dev_scope, model_id=DEFAULT_BEDROCK_MODEL
         c.append(SimCase("dashboard", f"{action.split(':')[1]} findings", action, fnd, {}, DENIED))
     c.append(SimCase("dashboard", "Scan findings (sanity)", "dynamodb:Scan", fnd, {}, ALLOWED))
     c.append(SimCase("dashboard", f"bedrock:InvokeModel on configured profile {model_id}", "bedrock:InvokeModel",
-                     f"arn:aws:bedrock:{r}:{a}:inference-profile/{model_id}", {}, INFO,
-                     "denied today: Bedrock is not granted until #43"))
-    c.append(SimCase("dashboard", "bedrock:InvokeModel on another model", "bedrock:InvokeModel",
+                     f"arn:aws:bedrock:{r}:{a}:inference-profile/{model_id}", {}, ALLOWED))
+    c.append(SimCase("dashboard", "bedrock:InvokeModel on amazon.nova-pro-v1:0", "bedrock:InvokeModel",
                      f"arn:aws:bedrock:{r}::foundation-model/amazon.nova-pro-v1:0", {}, DENIED))
+    cnt = table("counters")
+    c.append(SimCase("dashboard", "UpdateItem counters [bedrock#2026-11-26] attributes [count, ttl]",
+                     "dynamodb:UpdateItem", cnt, {"dynamodb:LeadingKeys": ["bedrock#2026-11-26"],
+                                                  "dynamodb:Attributes": ["count", "ttl"],
+                                                  "dynamodb:ReturnValues": "UPDATED_NEW"}, ALLOWED))
+    c.append(SimCase("dashboard", "UpdateItem counters [other#x] attributes [count, ttl]", "dynamodb:UpdateItem",
+                     cnt, {"dynamodb:LeadingKeys": ["other#x"], "dynamodb:Attributes": ["count", "ttl"]}, DENIED))
+    c.append(SimCase("dashboard", "UpdateItem counters [bedrock#2026-11-26] attributes [foo]", "dynamodb:UpdateItem",
+                     cnt, {"dynamodb:LeadingKeys": ["bedrock#2026-11-26"], "dynamodb:Attributes": ["foo"]}, DENIED))
+    c.append(SimCase("dashboard", "UpdateItem counters, no LeadingKeys / Attributes keys", "dynamodb:UpdateItem",
+                     cnt, {}, DENIED))
+    c.append(SimCase("dashboard", "PutItem counters", "dynamodb:PutItem", cnt,
+                     {"dynamodb:LeadingKeys": ["bedrock#2026-11-26"]}, DENIED))
+    budget_arn = f"arn:aws:budgets::{a}:budget/{p}account-monthly"
+    c.append(SimCase("dashboard", f"budgets:ViewBudget on {p}account-monthly", "budgets:ViewBudget", budget_arn, {},
+                     ALLOWED))
+    c.append(SimCase("dashboard", f"budgets:ModifyBudget on {p}account-monthly", "budgets:ModifyBudget",
+                     budget_arn, {}, DENIED))
 
     # digest
     profile = f"arn:aws:bedrock:{r}:{a}:inference-profile/{model_id}"
@@ -1096,7 +1199,8 @@ def render(rv: Review, exit_code: int) -> str:
     w("")
     w("Rules: W1 trust without aws:SourceAccount / SourceArn · W2 Lambda permission without SourceArn / "
       "SourceAccount · W3 findings writes without dynamodb:Attributes / LeadingKeys (or ForAllValues without a "
-      "Null guard) · W4 dashboard KMS / SSM / S3 scope · W5 logs beyond the role's own log group · W6 mutating EC2 "
+      "Null guard) · W4 dashboard scope (KMS / SSM / S3, Bedrock model, counters UpdateItem keys / attributes, "
+      "budgets ViewBudget only) · W5 logs beyond the role's own log group · W6 mutating EC2 "
       "action without a guardian:dev-scope condition · W7 resource policy principals · W8 digest scope (Bedrock "
       "model, Notify only, DynamoDB Scan only).")
     w("")

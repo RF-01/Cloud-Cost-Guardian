@@ -1,7 +1,103 @@
-/* Cloud Cost Guardian dashboard charts (task #26).
- * Data comes only from the same-origin JSON endpoints; text from the data (owner, project, service names)
- * is drawn on canvas by Chart.js or written with textContent, never as HTML.
+/* Cloud Cost Guardian dashboard: the Ask box (task #43) and the charts (task #26).
+ * Data comes only from the same-origin JSON endpoints; text from the data or the server (owner, project, service
+ * names, AI answers) is drawn on canvas by Chart.js or written with textContent, never as HTML.
  */
+
+/* ---------------------------------------------------------------- Ask box (#43)
+ * POST /api/ask with Content-Type application/json and X-Requested-With: guardian-dashboard (the server's CSRF
+ * check). Its own IIFE, so it works even if Chart.js failed to load. */
+(function () {
+  "use strict";
+
+  var form = document.getElementById("ask-form");
+  if (!form) { return; }
+  var cfg = JSON.parse(document.getElementById("page-config").textContent);
+  var box = document.getElementById("ask-question");
+  var button = document.getElementById("ask-button");
+  var count = document.getElementById("ask-count");
+  var status = document.getElementById("ask-status");
+  var result = document.getElementById("ask-result");
+  var asked = document.getElementById("ask-asked");
+  var answer = document.getElementById("ask-answer");
+  var remaining = document.getElementById("ask-remaining");
+  var cap = cfg.askDailyCap;
+  var maxChars = cfg.askMaxChars;
+  var busy = false;
+
+  function updateCount() { count.textContent = box.value.length + " / " + maxChars; }
+
+  function showStatus(text, isError) {
+    status.textContent = text;
+    status.className = "ask-status" + (isError ? " error" : "");
+    status.hidden = !text;
+  }
+
+  function showRemaining(n) {
+    if (typeof n === "number") { remaining.textContent = n + " of " + cap + " questions left today"; }
+  }
+
+  function minutes(seconds) {
+    var m = Math.ceil(Number(seconds) / 60);
+    return isFinite(m) && m > 0 ? m + (m === 1 ? " minute" : " minutes") : "a while";
+  }
+
+  function errorText(httpStatus, body, retryAfter) {
+    var code = body && body.error;
+    if (httpStatus === 429 && code === "daily_cap") {
+      return "The dashboard has used all " + cap + " questions for today (UTC). Try again tomorrow.";
+    }
+    if (httpStatus === 429 && code === "ask_rate_limited") {
+      return "Too many questions from you: at most " + cfg.askPerHour + " per hour. Try again in " + minutes(retryAfter) + ".";
+    }
+    if (httpStatus === 429) { return "Too many requests. Wait " + minutes(retryAfter) + " and try again."; }
+    if (httpStatus === 400) { return (body && body.message) || "The question was not accepted."; }
+    if (httpStatus === 413) { return "The question is too long."; }
+    if (httpStatus === 502 && code === "data_unavailable") { return "The dashboard data is unavailable right now. Try again later."; }
+    if (httpStatus === 502 || httpStatus === 504) { return "The AI assistant is unavailable right now. Try again later."; }
+    if (httpStatus === 403) { return "The request was refused. Reload the page and try again."; }
+    return "Something went wrong (HTTP " + httpStatus + "). Try again later.";
+  }
+
+  box.addEventListener("input", updateCount);
+  updateCount();
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if (busy) { return; }
+    var question = box.value.trim();
+    if (!question) { showStatus("Type a question first.", true); return; }
+    if (question.length > maxChars) { showStatus("The question is longer than " + maxChars + " characters.", true); return; }
+    busy = true;
+    button.disabled = true;
+    showStatus("Asking Amazon Bedrock…", false);
+    fetch("/api/ask", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "guardian-dashboard", "Accept": "application/json" },
+      body: JSON.stringify({ question: question })
+    }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (body) {
+        if (r.ok && body && typeof body.answer === "string") {
+          showStatus("", false);
+          asked.textContent = question;
+          answer.textContent = body.answer;
+          showRemaining(body.remainingToday);
+          result.hidden = false;
+          return;
+        }
+        showStatus(errorText(r.status, body, r.headers.get("Retry-After")), true);
+        if (body) { showRemaining(body.remainingToday); }
+      });
+    }).catch(function () {
+      showStatus("Could not reach the dashboard. Check your connection and try again.", true);
+    }).then(function () {
+      busy = false;
+      button.disabled = false;
+    });
+  });
+})();
+
+/* ---------------------------------------------------------------- charts (#26) */
 (function () {
   "use strict";
 

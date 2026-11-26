@@ -97,7 +97,7 @@ module "scanner" {
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
 # dashboard_instance_id, dashboard_public_dns.
 # Inputs are added as each dashboard task needs them (CONTRACT §8): #42 (weekly digest) adds the Bedrock model,
-# Notify and the team address.
+# Notify and the team address; #43 (Ask box) adds the daily cap and the question length.
 
 module "dashboard" {
   source = "../../dashboard/terraform"
@@ -114,11 +114,13 @@ module "dashboard" {
   public_subnet_id = module.platform_core.public_subnet_id
   origin_secret    = var.origin_secret
 
-  bedrock_model_id     = var.bedrock_model_id
-  bedrock_max_tokens   = var.bedrock_max_tokens
-  notify_function_name = module.platform_core.notify_function_name
-  notify_function_arn  = module.platform_core.notify_function_arn
-  team_email           = var.team_email
+  bedrock_model_id           = var.bedrock_model_id
+  bedrock_max_tokens         = var.bedrock_max_tokens
+  bedrock_daily_cap          = var.bedrock_daily_cap
+  bedrock_max_question_chars = var.bedrock_max_question_chars
+  notify_function_name       = module.platform_core.notify_function_name
+  notify_function_arn        = module.platform_core.notify_function_arn
+  team_email                 = var.team_email
 }
 
 # --- Lane C: platform edge ---------------------------------------------------

@@ -13,7 +13,7 @@ REGION = "us-west-2"
 
 
 def create_dashboard_tables(prefix, region=REGION):
-    """The five tables the dashboard reads, shaped like platform core's (CONTRACT §3). Call inside mock_aws."""
+    """The tables the dashboard uses, shaped like platform core's (CONTRACT §3). Call inside mock_aws."""
     ddb = boto3.client("dynamodb", region_name=region)
 
     def table(name, keys, gsi=None):
@@ -39,6 +39,7 @@ def create_dashboard_tables(prefix, region=REGION):
     table("daily-summaries", [("day", "HASH")])
     table("bill-history", [("day", "HASH"), ("key", "RANGE")])
     table("budget-alerts", [("budgetName", "HASH"), ("receivedAt", "RANGE")])
+    table("counters", [("counterId", "HASH")])          # Ask box daily cap (#43)
     return ddb
 
 
