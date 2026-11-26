@@ -54,12 +54,11 @@ SYSTEM_PROMPT = (
     "before credits for the budget period. Rows with \"sample\": true are demo data, not real; if you use them, say "
     "they are sample data. You cannot take actions: you cannot stop, delete, protect, postpone, restore or change "
     "anything (owners act through the links in the Guardian's emails). "
-    "Only findings with status open, in_progress or failed are current waste; their total is "
-    "totals.activeEstimatedMonthlyWaste. Never call a remediated, resolved or report-only protected finding "
-    "wasting. A remediated finding was already handled by the Guardian: if dryRun is true, the action was only "
-    "simulated, the resource is still running and its estimatedMonthlyCost is a potential saving, not current "
-    "waste; if dryRun is false, realizedMonthlySavings is the saving. Say which status a finding has when you "
-    "mention it. "
+    "Current waste is only what is listed in currentWaste; its total is totals.activeEstimatedMonthlyWaste. "
+    "Report-only findings in currentWaste (protected or autoscaling) still cost money but get no warnings or "
+    "actions. Findings in handledFindings are never current waste: describe them with their outcome field, and say "
+    "when they were dry runs. If totals.activeEstimatedMonthlyWaste is 0 and currentWaste is empty, say that there "
+    "is no current waste before anything else. Say which status a finding has when you mention it. "
     "Answer in plain text only: no markdown, no backticks, no asterisks, no bullet characters; write resource IDs "
     "as plain words. Use at most about 150 words."
 )
@@ -148,6 +147,9 @@ FINDING_FIELDS = ("resourceId", "findingType", "resourceType", "region", "status
                   "estimatedMonthlyCost", "firstSeenAt", "deadlineAt", "timelineStep", "reportOnlyReason",
                   "dryRun", "realizedMonthlySavings", "remediatedAt", "failedStep", "restartCount", "missingTags")
 CUT_FIELDS = ("owner", "project", "name", "resourceId")
+OUTCOME_DRY_RUN = ("dry run: the action was only simulated, so the resource is still running; this is NOT current "
+                   "waste, it is a potential saving if the action is done for real")
+OUTCOME_REAL = "action taken: the saving is realized"
 
 
 def _finding(f, now):
@@ -158,6 +160,8 @@ def _finding(f, now):
         row["missingTags"] = [_cut(t) for t in row["missingTags"]]
     if f.get("status") in views.ACTIVE:
         row["costSoFar"] = views.cost_so_far(f, now)
+    if f.get("status") == "remediated":
+        row["outcome"] = OUTCOME_REAL if f.get("dryRun") is False else OUTCOME_DRY_RUN
     if views.is_sample(f):
         row["sample"] = True
     return _compact(row)
@@ -174,7 +178,6 @@ def _findings_part(store, now):
             at = views.parse_time(f.get("remediatedAt"))
             if at is not None and at >= since:
                 remediated.append(f)
-    rows = sorted(active, key=views._cost_key) + sorted(remediated, key=views._cost_key)
     real_active = [f for f in active if not views.is_sample(f)]
     real_rem = [f for f in remediated if not views.is_sample(f)]
     waste = [_num(f.get("estimatedMonthlyCost")) for f in real_active if f.get("findingType") not in NOT_WASTE]
@@ -183,6 +186,13 @@ def _findings_part(store, now):
         by_status[f.get("status")] = by_status.get(f.get("status"), 0) + 1
         by_type[f.get("findingType")] = by_type.get(f.get("findingType"), 0) + 1
     realized = [_num(f.get("realizedMonthlySavings")) for f in real_rem if f.get("dryRun") is False]
+    # CONTRACT §3.6: a dry-run (or unmarked) remediation is a potential saving = realizedMonthlySavings, else
+    # estimatedMonthlyCost.
+    potential = []
+    for f in real_rem:
+        if f.get("dryRun") is not False:
+            value = _num(f.get("realizedMonthlySavings"))
+            potential.append(value if value is not None else _num(f.get("estimatedMonthlyCost")))
     totals = {
         "activeFindings": len(real_active),
         "activeByStatus": by_status,
@@ -192,9 +202,14 @@ def _findings_part(store, now):
         "remediatedLast30Days": len(real_rem),
         "remediatedLast30DaysDryRun": sum(1 for f in real_rem if f.get("dryRun") is not False),
         "realizedMonthlySavingsLast30Days": round(sum(v for v in realized if v is not None), 2),
+        "potentialSavingsFromDryRun": round(sum(v for v in potential if v is not None), 2),
         "sampleFindings": len(active) + len(remediated) - len(real_active) - len(real_rem),
     }
-    return [_finding(f, now) for f in rows], totals
+    # Two lists, so the model never has to tell waste from handled findings by status (#43 follow-up 3):
+    # currentWaste = active (report-only included, §3.6); handledFindings = remediated in the last 30 days.
+    current = [_finding(f, now) for f in sorted(active, key=views._cost_key)]
+    handled = [_finding(f, now) for f in sorted(remediated, key=views._cost_key)]
+    return current, handled, totals
 
 
 def _summaries_part(store, today):
@@ -309,7 +324,7 @@ def build_ask_data(store, now, prefix):
 
     got = part("findings", lambda: _findings_part(store, now))
     if got:
-        lists["findings"], t = got
+        lists["currentWaste"], lists["handledFindings"], t = got
         data["totals"].update(t)
     got = part("dailySummaries", lambda: _summaries_part(store, today))
     if got:
