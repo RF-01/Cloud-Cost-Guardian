@@ -206,6 +206,21 @@ def test_digest_renders_items_with_null_money_and_links():
     for needle in ("Two volumes waste money.", "Protected", "snap-1", "Budget alerts", "vol-7",
                    tpl.NOT_ESTIMATED, f"{API}/action?t=AAA", "Nov 23, 2026 16:30 UTC"):
         assert needle in html_body and needle in text
+    heading = "AI summary (written by Amazon Bedrock from the data below)"
+    assert heading in html_body and heading in text and ">Summary<" not in html_body
+
+
+def test_digest_ai_summary_is_escaped_and_absent_when_empty():
+    vars_ = dict(R_VARS["DIGEST"], aiSummary='<a href="http://evil">click</a> & <script>x</script>')
+    t, findings, v = tpl.validate({"template": "DIGEST", "to": None, "vars": vars_, "findings": []})
+    _, html_body, text = tpl.render(t, v, findings, {})
+    assert "<script>" not in html_body and '<a href="http://evil">' not in html_body
+    assert "&lt;a href=&quot;http://evil&quot;&gt;click&lt;/a&gt; &amp; &lt;script&gt;" in html_body
+    assert '<a href="http://evil">click</a>' in text  # plain-text part shows it literally
+    t, findings, v = tpl.validate({"template": "DIGEST", "to": None, "vars": dict(R_VARS["DIGEST"], aiSummary=""),
+                                   "findings": []})
+    _, html_body, _ = tpl.render(t, v, findings, {})
+    assert "AI summary" not in html_body and "Nothing open this week." in html_body
 
 
 def test_script_in_name_is_escaped_in_html_but_literal_in_subject():

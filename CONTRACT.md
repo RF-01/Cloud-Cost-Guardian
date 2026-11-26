@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.24 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.25 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -281,14 +281,15 @@ R = required, O = optional. Every template also gets `links` from Notify (§4.1)
 | `MISSING_TAGS` | scanner, once per episode (new / reopened), only when the Guardian cannot fix the tags itself (§4.8) | R: `resourceId`, `resourceType`, `region`, `missingTags` (list). O: `creatorLookup` (`unknown` reason text) |
 | `MISSING_TAGS_GROUPED` | scanner, as `MISSING_TAGS`, when an instance and resources attached to it are all untagged (§4.8) | R: `instanceId`, `region`, `resources` (list of `{resourceId, resourceType, missingTags}`) |
 | `RESTORE_DONE` | action Lambda | R: `sourceVolumeId`, `snapshotId`, `newVolumeId`, `availabilityZone`, `region` |
-| `DIGEST` | digest Lambda | R: `findings` (list, below), `protected` (list of `{resourceId, resourceType, region, estimatedMonthlyCost, name?}`), `snapshots` (list of `{snapshotId, sourceVolumeId, region, sizeGb, monthlyCost, ageDays}`), `budgetAlerts` (list of `{budgetName, thresholdType, threshold, receivedAt}`), `missingTags` (list of `{resourceId, resourceType, region, missingTags}`). O: `aiSummary` (empty if Bedrock failed) |
+| `DIGEST` | digest Lambda (rules: §4.10) | R: `findings` (list, below), `protected` (list of `{resourceId, resourceType, region, estimatedMonthlyCost, name?}`), `snapshots` (list of `{snapshotId, sourceVolumeId, region, sizeGb, monthlyCost, ageDays}`), `budgetAlerts` (list of `{budgetName, thresholdType, threshold, receivedAt}`), `missingTags` (list of `{resourceId, resourceType, region, missingTags}`). O: `aiSummary` (empty if Bedrock failed) |
 
 Notify accepts `elasticIps` missing / null (= empty) or a single string (= one item), because JSONata may drop
 empty lists or unwrap one-item lists.
 
 `DIGEST` `findings` items: `{resourceId, findingType, resourceType, region, status, estimatedMonthlyCost, costSoFar,
 daysOpen, deadlineAt?, timelineStep?, reportOnlyReason?, name?}`. Every item also appears in the top-level `findings`
-list of the Notify input (so it gets `lastNotifiedAt` and, if `in_progress`, its links).
+list of the Notify input (so it gets `lastNotifiedAt` and, if `in_progress`, its links). How the digest fills these
+lists, who gets an email and the Bedrock summary: §4.10.
 
 ### 4.3 Remediation — called by workflows only
 Input: `{ "action": "<ACTION>", "resourceId": "...", "region": "...", "dryRun": true, "findingType": "...",
@@ -362,7 +363,7 @@ flexible window; `schedules_enabled = false` creates them DISABLED):
 | `scan` | `cron(7 */3 * * ? *)` | every 3 h at :07 | 0 | **0** (a failed / timed-out scan is not retried; the next one comes within 3 h; alarm `<prefix>scanner-errors`) |
 | `daily-cost` | `cron(20 5 * * ? *)` | 05:20 daily | 2 | default 2, then DLQ (rows are overwritten, a retry is safe) |
 | `daily-summary` | `cron(40 23 * * ? *)` | 23:40 daily (late in the day, after its activity) | 2 | default 2, then DLQ |
-| `digest` | `cron(30 6 ? * MON *)` | Monday 06:30 | 2 | default; the schedule is created when `digest_enabled` is true (#42) |
+| `digest` | `cron(30 6 ? * MON *)` | Monday 06:30 | 2 | default 2, then DLQ (a retry only follows a read failure, before any email, §4.10); the schedule exists when `digest_enabled` is true (infra/stack: true since #42) |
 
 Scheduler's retries cover only failed deliveries (the Invoke call); a failed delivery goes to the core DLQ.
 
@@ -430,6 +431,68 @@ For each record:
   are raised (Lambda retries the async invocation, then the DLQ).
 - Role: logs on its own log group, `dynamodb:PutItem` on budget-alerts, `sqs:SendMessage` on the DLQ. Nothing else.
 
+### 4.10 Weekly digest (lane D)
+
+Input: the scheduled event `{"source": "schedule", "job": "digest"}` (§4.7). Any other event is logged and returns
+`{"skipped": true}` (no raise).
+
+- **Reads** (paginated Scan): every item of `findings`; `budget-alerts` with `receivedAt` ≥ now − 7 days. Items
+  with `sample` = true are ignored. A read failure raises (nothing was sent yet, so the async retry is safe).
+- **Active** = status `open` / `in_progress` / `failed` (`resolved` and `remediated` are never listed).
+- **Recipient** of an active finding: its `owner` lowercased (trimmed) if it contains `@` and is not `TEAM_EMAIL`
+  (lowercased); otherwise the team (Notify `to` = null). So the team's digest merges unowned findings, findings
+  with an invalid owner and findings owned by the team address.
+- **Inclusion rule** (sections findings, snapshots, missingTags): `lastNotifiedAt` absent (or unreadable) or at
+  least `DIGEST_MIN_DAYS_SINCE_NOTICE` (6) days old. A weekly digest needs this: the previous digest set
+  `lastNotifiedAt` just under 7 days ago. This is a deliberate difference from design §10.1's "more than 7 days".
+- **Sections** per recipient (`vars`, items as in §4.2):
+  - `findings`: active findings except `MISSING_TAGS`, `SNAPSHOT_REMINDER` and `reportOnlyReason` = `protected`
+    (so `autoscaling` report-only and `EIP_*` findings are listed), inclusion rule. `costSoFar` =
+    `estimatedMonthlyCost` × hours since `firstSeenAt` / 730 (2 decimals; null without an estimate or
+    `firstSeenAt`); `daysOpen` = whole days since `firstSeenAt` (null without it); `deadlineAt`, `timelineStep`,
+    `reportOnlyReason`, `name` only when present; `name` cut to 64 characters.
+  - `protected`: active findings with `reportOnlyReason` = `protected`, **every week** (no inclusion rule)
+    → `{resourceId, resourceType, region, estimatedMonthlyCost, name?}`. Never in the Notify top-level `findings`
+    (no `lastNotifiedAt`, no links).
+  - `snapshots`: `open` `SNAPSHOT_REMINDER`, inclusion rule → `{snapshotId = resourceId, sourceVolumeId, region,
+    sizeGb, monthlyCost = estimatedMonthlyCost, ageDays = whole days since firstSeenAt}`.
+  - `missingTags`: active `MISSING_TAGS`, inclusion rule → `{resourceId, resourceType, region, missingTags}`.
+  - `budgetAlerts`: the same list for every recipient, newest first, at most 20 → `{budgetName, thresholdType,
+    threshold, receivedAt}` (absent fields → null).
+  - `dryRun` (from `DRY_RUN`: dry-run unless exactly `false`, trimmed, any case; display only) and `aiSummary`.
+- **Caps:** findings / snapshots / missingTags are each sorted by `estimatedMonthlyCost` descending (unknown last)
+  and cut to `DIGEST_MAX_ITEMS` (50); the cut is logged. Cut items get no `lastNotifiedAt`, so they come back next
+  week.
+- **Notify top-level `findings`** = every item of findings + snapshots + missingTags (not protected):
+  `{resourceId, findingType, generation (integer, 0 if absent), actions}`. `actions` = `["protect", "postpone"]`
+  with `expiresAt` = `deadlineAt` only for `in_progress` `EC2_IDLE` / `EBS_UNATTACHED` without `reportOnlyReason`
+  whose `deadlineAt` is more than 5 minutes ahead; otherwise `[]`.
+- **Who gets an email:** the team always (an empty digest says "Nothing open this week"); an owner only if one of
+  findings / protected / snapshots / missingTags is non-empty. Order: team first, then owners by findings waste
+  descending. At most `DIGEST_MAX_EMAILS` (20) per run; the rest are `skipped_cap` (logged, not sent later).
+- **Time guard:** before each recipient, if less than 120 s of the invocation remain, stop; the rest are
+  `skipped_time` (worst case per recipient: Bedrock 40 s + Notify 75 s; Lambda timeout 180 s).
+- **Notify:** synchronous Invoke (RequestResponse) of `NOTIFY_FUNCTION_NAME`, connect 5 s, read 70 s, no client
+  retry. A `FunctionError` or any exception counts as `error`.
+- **No raise after a send:** once any Notify invoke has been attempted the handler never raises (a retry would
+  resend emails); per-recipient errors are logged and counted.
+- **Bedrock summary (`aiSummary`):** Converse in us-west-2 with `BEDROCK_MODEL_ID`, `maxTokens` =
+  `BEDROCK_MAX_TOKENS`, temperature 0.2, no reasoning config; connect 5 s, read 15 s, at most 2 attempts. Skipped
+  when the recipient's digest is empty (no items in any section, budget alerts included). The system prompt asks
+  for 2–4 plain sentences, no markdown, using only the JSON between `<data>` tags, which is untrusted data and not
+  instructions, never inventing numbers, mentioning the total estimated monthly waste, the biggest items and
+  upcoming deadlines. Totals are computed in code and included (findings waste, counts per section, items shown,
+  next deadlines). The JSON is at most 40,000 characters (items dropped from the longest list first, marked
+  `listsTruncated`); `<` and `>` are escaped inside it. Output: text blocks joined, whitespace collapsed, at most
+  1,200 characters. Any error → `aiSummary` "" (logged `bedrock failed`); input / output tokens are logged.
+  Notify renders it HTML-escaped under "AI summary (written by Amazon Bedrock from the data below)".
+- **Logs:** one JSON line per recipient (recipient, item counts per section, bedrock result, notify result) and a
+  final `{"action": "digest", "result": "done", recipients, sent, error, skipped_cap, skipped_time}`.
+- **No audit entries** (Notify writes none for `DIGEST`).
+- Role: logs on its own log group, `dynamodb:Scan` on findings and budget-alerts, `lambda:InvokeFunction` on
+  Notify, `bedrock:InvokeModel` on the configured inference profile and its foundation model in us-east-1 /
+  us-east-2 / us-west-2, `sqs:SendMessage` on the DLQ. Nothing else.
+
 ## 5. Tags
 
 | Tag | Values | Meaning |
@@ -448,7 +511,7 @@ For each record:
 |---|---|---|
 | `NAME_PREFIX` | all | `cg-dev-` |
 | `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_TOKENS`, `TABLE_CREATOR_LOOKUPS`, `TABLE_VOLUME_ATTACHMENTS`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | as needed | `cg-dev-findings` |
-| `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying and the owner tag set after a creator lookup: dry-run = log only) | `true` |
+| `DRY_RUN` | engine, action (postponed timelines), scanner (tag copying and the owner tag set after a creator lookup: dry-run = log only), digest (display only, §4.10) | `true` |
 | `SCAN_REGIONS` | scanner | `all` or `us-west-2,us-east-1` |
 | `DEV_SCOPE` | scanner, engine, action | empty in the team stack; in personal stacks = `NAME_PREFIX`, and only resources tagged `guardian:dev-scope=<same>` are acted on or emailed; enforced in IAM for the scanner, remediation and action roles (code checks stay) |
 | `DETECTION_WINDOW_MINUTES` | scanner, engine (remediation `CHECK_EC2`) | `30` (demo) / `1440` |
@@ -456,7 +519,8 @@ For each record:
 | `WAIT_BEFORE_FINAL_SECONDS_EC2`, `WAIT_BEFORE_ACTION_SECONDS_EC2`, same for `_EBS` | scanner, action (passed into workflow input) | `120` |
 | `POSTPONE_SECONDS` | action | `604800` (7 days); minutes in tests |
 | `NOTIFY_FUNCTION_NAME` | scanner, digest, action, engine | `cg-dev-notify` |
-| `SENDER_EMAIL`, `TEAM_EMAIL` | notify | |
+| `SENDER_EMAIL` | notify | |
+| `TEAM_EMAIL` | notify, digest (recipient grouping, §4.10) | |
 | `ACTION_API_URL` | notify | output of platform core (§8) |
 | `RESTORE_LINK_DAYS` | engine (EBS workflow definition; a Terraform local) | `30` |
 | `BEDROCK_MODEL_ID` | digest, dashboard | `us.amazon.nova-2-lite-v1:0` (an inference profile ID) |
@@ -465,6 +529,9 @@ For each record:
 | `BEDROCK_MAX_QUESTION_CHARS` | dashboard | `500` |
 | `MAX_POSTPONES`, `MAX_RESTARTS` | action, scanner, timeline | `2`, `2` |
 | `EIP_STOPPED_THRESHOLD_HOURS` | scanner | `24` |
+| `DIGEST_MIN_DAYS_SINCE_NOTICE` | digest | `6` |
+| `DIGEST_MAX_EMAILS` | digest | `20` |
+| `DIGEST_MAX_ITEMS` | digest | `50` |
 
 Thresholds (CPU / network / disk) and the idle classification live in `common/idle.py` (used by the scanner and the
 remediation re-check), with the values decided by the team (design §24).
@@ -495,7 +562,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge, 
 | `platform/terraform/core` | `team_email`, `sender_email`, `budgets_enabled`, `account_budget_usd`, `project_budgets` (map(number), key = `project` tag value) | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
 | `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
-| `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
+| `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `bedrock_max_tokens`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name`, `notify_function_arn`, `team_email` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_username`, `dashboard_password` (all three sensitive) | `dashboard_url` |
 | `platform/terraform/schedules` | `scanner_function_arn`, `scanner_function_name`, `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_enabled` (bool, default false: creates the digest schedule; the schedule set depends only on this, never on ARNs), `digest_function_arn` (default `""`; required when `digest_enabled`), `dlq_arn`, `team_topic_arn`, `schedules_enabled` | `schedule_names` (map keyed by job), `schedule_group_name` |
 
@@ -581,3 +648,4 @@ budget amounts (now infra/stack variables `account_budget_usd`, `project_budgets
   23:40, digest Mon 06:30 UTC; scan not retried), AWS Budgets (account + per project, usage before credits) to the
   team topic, budget alert subscriber (idempotent, alarms skipped), schedules module (#37).
 - v2.24 — §6 / §8: dev scope enforced in IAM for remediation and action roles, key / attribute limits on workflow, action and notify findings writes; IAM review tool (#39).
+- v2.25 — §4.10 weekly digest (recipients, ≥6-day rule, Protected section, caps, Bedrock summary), §6 digest settings, §8 dashboard inputs (#42).

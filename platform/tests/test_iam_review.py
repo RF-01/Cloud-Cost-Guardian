@@ -467,7 +467,7 @@ def test_simulate_ok_unexpected_info_and_errors():
         ir.SimCase("remediation", "bad", "ec2:StopInstances", "arn:i", {"k": "v"}, ir.EXPLICIT),
         ir.SimCase("remediation", "info", "ec2:StopInstances", "arn:i", {}, ir.INFO),
         ir.SimCase("remediation", "boom", "ec2:Foo", "*", {}, ir.ALLOWED),
-        ir.SimCase("digest", "skipped", "x:y", "*", {}, ir.ALLOWED),
+        ir.SimCase("no-such-role", "skipped", "x:y", "*", {}, ir.ALLOWED),
     ]
 
     def decide(kw):
@@ -564,7 +564,8 @@ def test_collect_is_read_only_and_reports_missing_roles():
     rv = ir.Review(prefix=PREFIX, account=ACCT, region=REGION, dev_scope="")
     ir.collect(session, rv)
     assert set(rv.roles) == {"remediation", "extra"}
-    assert rv.extra_roles == ["extra"] and "scanner" in rv.missing_roles and rv.not_deployed == ["digest"]
+    assert rv.extra_roles == ["extra"] and "scanner" in rv.missing_roles and "digest" in rv.missing_roles
+    assert rv.not_deployed == []  # the digest is an expected role since #42
     assert all(op.split(":")[1].startswith(("get_", "list_")) for op in session.ops), session.ops
     kinds = {rp["kind"]: rp for rp in rv.resource_policies}
     assert kinds["lambda"]["policy"] is None and kinds["s3"]["policy"] is None and kinds["sqs"]["policy"] is None
@@ -587,6 +588,82 @@ def test_design_diff_flags_new_and_missing_actions():
     rows = {r[0]: r for r in ir.design_diff(review(roles))}
     assert rows["daily-cost"][1] == ["sqs:SendMessage"] and rows["daily-cost"][2] == ["ce:GetCostForecast"]
     assert rows["digest"][2] == ["(role not deployed)"]
+
+
+# ---------------------------------------------------------------- digest (#42)
+
+MODEL = "us.amazon.nova-2-lite-v1:0"
+
+
+def good_digest():
+    """Mirrors dashboard/terraform/digest.tf."""
+    fm = [f"arn:aws:bedrock:{r}::foundation-model/amazon.nova-2-lite-v1:0"
+          for r in ("us-east-1", "us-east-2", "us-west-2")]
+    return policy(logs("digest"),
+                  allow("ScanFindingsAndBudgetAlerts", "dynamodb:Scan", [TABLE + "findings", TABLE + "budget-alerts"]),
+                  allow("InvokeNotify", "lambda:InvokeFunction", f"arn:aws:lambda:{REGION}:{ACCT}:function:{PREFIX}notify"),
+                  allow("InvokeConfiguredModel", "bedrock:InvokeModel",
+                        [f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{MODEL}"] + fm),
+                  allow("DeadLetterQueue", "sqs:SendMessage", f"arn:aws:sqs:{REGION}:{ACCT}:{PREFIX}dlq"))
+
+
+def test_digest_is_an_expected_lambda_role():
+    assert ir.EXPECTED_ROLES["digest"] == "lambda.amazonaws.com" and "digest" not in ir.OPTIONAL_ROLES
+    assert "Not deployed" not in ir.DESIGN_NOTES["digest"] and "budget-alerts" in ir.DESIGN_NOTES["digest"]
+
+
+def test_w8_good_digest_policy_is_clean():
+    rv = ir.analyze(review({"digest": (trust(), good_digest())}))
+    assert [i for i in rv.hard + rv.warnings if i.role == "digest"] == []
+
+
+@pytest.mark.parametrize("stmt,needle", [
+    (allow("B", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}::foundation-model/*"), "beyond the configured"),
+    (allow("B", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}::foundation-model/amazon.nova-pro-v1:0"),
+     "beyond the configured"),
+    (allow("B", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/us.amazon.nova-pro-v1:0"),
+     "beyond the configured"),
+    (allow("B", "bedrock:InvokeModel", f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/*"),
+     "beyond the configured"),
+    (allow("B", "bedrock:InvokeModelWithResponseStream",
+           f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{MODEL}"), "besides InvokeModel"),
+    (allow("L", "lambda:InvokeFunction", f"arn:aws:lambda:{REGION}:{ACCT}:function:{PREFIX}scanner"), "beyond Notify"),
+    (allow("L", "lambda:InvokeFunction", f"arn:aws:lambda:{REGION}:{ACCT}:function:{PREFIX}*"), "beyond Notify"),
+    (allow("D", ["dynamodb:Scan", "dynamodb:PutItem"], TABLE + "findings"), "other than Scan"),
+    (allow("D", "dynamodb:Scan", TABLE + "audit"), "beyond findings / budget-alerts"),
+])
+def test_w8_digest_scope_warnings(stmt, needle):
+    doc = good_digest()
+    doc["Statement"].append(stmt)
+    rv = ir.analyze(review({"digest": (trust(), doc)}))
+    w8 = [i for i in rv.warnings if i.rule == "W8"]
+    assert w8 and any(needle in i.message for i in w8), [i.message for i in rv.warnings]
+    assert all(i.sid == stmt["Sid"] for i in w8)
+
+
+def test_w8_uses_the_configured_model_id():
+    rv = review({"digest": (trust(), good_digest())})
+    rv.bedrock_model_id = "us.amazon.nova-pro-v1:0"
+    ir.analyze(rv)
+    assert {i.sid for i in rv.warnings if i.rule == "W8"} == {"InvokeConfiguredModel"}
+
+
+def test_sim_cases_for_digest_and_scheduler():
+    cases = {(c.role, c.label): c for c in ir.sim_cases(PREFIX, ACCT, REGION, PREFIX, MODEL)}
+    profile = cases[("digest", f"bedrock:InvokeModel on configured profile {MODEL}")]
+    assert profile.expect == ir.ALLOWED
+    assert profile.resource == f"arn:aws:bedrock:{REGION}:{ACCT}:inference-profile/{MODEL}"
+    expected = {
+        "bedrock:InvokeModel on amazon.nova-pro-v1:0": ir.DENIED,
+        f"InvokeFunction {PREFIX}notify": ir.ALLOWED,
+        f"InvokeFunction {PREFIX}scanner": ir.DENIED,
+        "PutItem findings": ir.DENIED,
+        "Scan audit": ir.DENIED,
+    }
+    for label, exp in expected.items():
+        assert cases[("digest", label)].expect == exp, label
+    assert cases[("digest", "Scan audit")].resource.endswith(f"table/{PREFIX}audit")
+    assert cases[("scheduler", f"InvokeFunction {PREFIX}digest")].expect == ir.ALLOWED
 
 
 def test_main_refuses_wrong_account(monkeypatch, tmp_path):

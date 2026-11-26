@@ -96,8 +96,8 @@ module "scanner" {
 # --- Lane D: dashboard -------------------------------------------------------
 # Outputs (§8): daily_cost_function_arn, daily_summary_function_arn, digest_function_arn,
 # dashboard_instance_id, dashboard_public_dns.
-# Inputs are added as each dashboard task needs them (CONTRACT §8): bedrock_model_id and notify_function_name
-# come with #42 and #43.
+# Inputs are added as each dashboard task needs them (CONTRACT §8): #42 (weekly digest) adds the Bedrock model,
+# Notify and the team address.
 
 module "dashboard" {
   source = "../../dashboard/terraform"
@@ -113,6 +113,12 @@ module "dashboard" {
   vpc_id           = module.platform_core.vpc_id
   public_subnet_id = module.platform_core.public_subnet_id
   origin_secret    = var.origin_secret
+
+  bedrock_model_id     = var.bedrock_model_id
+  bedrock_max_tokens   = var.bedrock_max_tokens
+  notify_function_name = module.platform_core.notify_function_name
+  notify_function_arn  = module.platform_core.notify_function_arn
+  team_email           = var.team_email
 }
 
 # --- Lane C: platform edge ---------------------------------------------------
@@ -134,8 +140,8 @@ module "platform_edge" {
 # --- Lane C: schedules -------------------------------------------------------
 # Outputs (§8): schedule_names, schedule_group_name.
 # The scanner module has no scanner_function_name output, so the name is taken from its ARN.
-# digest_enabled = false (no digest schedule) and digest_function_arn = "" until the dashboard module outputs it;
-# #42 sets both. Which schedules exist depends only on digest_enabled, never on an ARN (unknown on a fresh stack).
+# digest_enabled is a plain true (#42): which schedules exist depends only on that bool, never on an ARN
+# (unknown on a fresh stack).
 
 module "schedules" {
   source = "../../platform/terraform/schedules"
@@ -149,8 +155,8 @@ module "schedules" {
   scanner_function_name      = element(split(":", module.scanner.scanner_function_arn), 6)
   daily_cost_function_arn    = module.dashboard.daily_cost_function_arn
   daily_summary_function_arn = module.dashboard.daily_summary_function_arn
-  digest_enabled             = false
-  digest_function_arn        = ""
+  digest_enabled             = true
+  digest_function_arn        = module.dashboard.digest_function_arn
   dlq_arn                    = module.platform_core.dlq_arn
   team_topic_arn             = module.platform_core.team_topic_arn
 }

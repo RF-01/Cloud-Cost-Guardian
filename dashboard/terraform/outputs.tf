@@ -8,6 +8,10 @@ output "daily_summary_function_arn" {
   value = aws_lambda_function.daily_summary.arn
 }
 
+output "digest_function_arn" {
+  value = aws_lambda_function.digest.arn
+}
+
 output "dashboard_instance_id" {
   value = aws_instance.dashboard.id
 }

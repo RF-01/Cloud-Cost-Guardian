@@ -36,9 +36,10 @@ EXPECTED_ROLES = {
     "daily-cost": "lambda.amazonaws.com",
     "daily-summary": "lambda.amazonaws.com",
     "dashboard": "ec2.amazonaws.com",
+    "digest": "lambda.amazonaws.com",
 }
-# Roles that may exist but are not deployed yet (reported as "not deployed", not as missing).
-OPTIONAL_ROLES = {"digest": "lambda.amazonaws.com"}  # task #42
+# Roles that may exist but are not deployed yet (reported as "not deployed", not as missing). None since #42.
+OPTIONAL_ROLES: dict = {}
 
 # H1: never granted to any Guardian role (design §16.1, CLAUDE.md).
 NEVER_GRANTED = ["ec2:DeleteSnapshot", "ec2:ReleaseAddress"]
@@ -99,7 +100,9 @@ DESIGN_NOTES = {
               "UpdateItem only (Notify writes them).",
     "daily-cost": "No ce:GetCostForecast (AWS Budgets covers forecasts); DLQ SendMessage.",
     "daily-summary": "Findings Scan, audit Query on GSI byDay only, PutItem on daily-summaries; DLQ SendMessage.",
-    "digest": "Not deployed yet (#42).",
+    "digest": "Reads findings + budget-alerts only (dynamodb:Scan, no writes: Notify sets lastNotifiedAt); "
+              "invokes only Notify; bedrock:InvokeModel only on the configured inference profile and its "
+              "foundation model in the profile's US regions; DLQ SendMessage (CONTRACT §4.10, #42).",
     "budget-subscriber": "PutItem on budget-alerts only; DLQ SendMessage (not in §16.1).",
     "dashboard": "Read-only DynamoDB; no Bedrock and no counters write yet (#43); adds s3:GetObject on its artifact "
                  "prefix and ssm:GetParameter on its origin-secret parameter.",
@@ -231,6 +234,7 @@ class Review:
     star_used: dict = field(default_factory=dict)       # allowlist pattern -> set(roles)
     h3_note: str = ""
     simulation: list = field(default_factory=list)
+    bedrock_model_id: str = DEFAULT_BEDROCK_MODEL_ID
 
     def flag(self, kind, rule, role, sid, message, fix=""):
         issue = Issue(rule, role, sid, message, fix)
@@ -491,6 +495,69 @@ def warn_dashboard_scope(rv, roles):
                 "checked until then.")
 
 
+# Geo prefixes of Bedrock cross-region inference profile IDs (profile "us.<model>" -> foundation model "<model>").
+BEDROCK_GEO_PREFIXES = ("us.", "eu.", "apac.", "us-gov.", "global.")
+
+
+def bedrock_allowed_arns(rv):
+    """The digest may invoke the configured profile in the stack region, and its foundation model in any region
+    (the US profile routes to us-east-1 / us-east-2 / us-west-2). "*" stands for one region name."""
+    model = rv.bedrock_model_id
+    foundation = next((model[len(g):] for g in BEDROCK_GEO_PREFIXES if model.startswith(g)), model)
+    return (f"arn:aws:bedrock:{rv.region}:{rv.account}:inference-profile/{model}",
+            f"arn:aws:bedrock:*::foundation-model/{foundation}")
+
+
+def _arn_allowed(resource, patterns):
+    import re
+    for pat in patterns:
+        # Only the region field may vary; the ARN itself must name exactly one model (no wildcards).
+        rx = "^" + re.escape(pat).replace(r"\*", "[a-z0-9-]+") + "$"
+        if re.match(rx, resource):
+            return True
+    return False
+
+
+def warn_digest_scope(rv, roles):
+    """W8: the digest invokes only the configured model and Notify, and only Scans DynamoDB (CONTRACT §4.10)."""
+    stmts = roles.get("digest", {}).get("statements")
+    if stmts is None:
+        return
+    models = bedrock_allowed_arns(rv)
+    notify = f"arn:aws:lambda:{rv.region}:{rv.account}:function:{rv.prefix}notify"
+    tables = {f"arn:aws:dynamodb:{rv.region}:{rv.account}:table/{rv.prefix}{t}" for t in ("findings", "budget-alerts")}
+    for s in stmts:
+        if not s.allow:
+            continue
+        if action_matches(s, "bedrock:InvokeModel"):
+            bad = ([r for r in s.resources if not _arn_allowed(r, models)]
+                   + [f"NotResource {r}" for r in s.not_resources])
+            if bad:
+                rv.flag("warn", "W8", "digest", s.sid, f"bedrock:InvokeModel beyond the configured profile "
+                        f"{rv.bedrock_model_id}: {', '.join(bad)}.", f"Resource = {models[0]} and "
+                        f"{models[1].replace(':*:', ':<region>:')} for the profile's regions only.")
+        bedrock_other = [a for a in s.actions
+                         if a.lower().startswith("bedrock:") and a.lower() != "bedrock:invokemodel"]
+        if bedrock_other:
+            rv.flag("warn", "W8", "digest", s.sid, f"Bedrock actions besides InvokeModel: {', '.join(bedrock_other)}.",
+                    "bedrock:InvokeModel only (Converse is authorized by InvokeModel).")
+        if action_matches(s, "lambda:InvokeFunction"):
+            bad = [r for r in s.resources if r != notify] + [f"NotResource {r}" for r in s.not_resources]
+            if bad:
+                rv.flag("warn", "W8", "digest", s.sid, f"lambda:InvokeFunction beyond Notify: {', '.join(bad)}.",
+                        f"Resource = {notify}.")
+        ddb = [a for a in s.actions if a.lower().startswith("dynamodb:")]
+        other_ddb = [a for a in ddb if a.lower() != "dynamodb:scan"]
+        if other_ddb:
+            rv.flag("warn", "W8", "digest", s.sid, f"DynamoDB actions other than Scan: {', '.join(other_ddb)}.",
+                    "dynamodb:Scan only (the digest reads; Notify writes lastNotifiedAt).")
+        if ddb:
+            other = [r for r in s.resources if r not in tables]
+            if other:
+                rv.flag("warn", "W8", "digest", s.sid, "DynamoDB access beyond findings / budget-alerts: "
+                        f"{', '.join(other)}.", "Resource = the findings and budget-alerts tables only.")
+
+
 def warn_dev_scope(rv, role, stmts):
     if not rv.dev_scope:
         return
@@ -611,6 +678,7 @@ def analyze(rv: Review) -> Review:
         warn_dev_scope(rv, role, stmts)
     check_h3(rv, rv.roles)
     warn_dashboard_scope(rv, rv.roles)
+    warn_digest_scope(rv, rv.roles)
     check_resource_policies(rv)
     return rv
 
@@ -887,11 +955,22 @@ def sim_cases(prefix, account, region, dev_scope, model_id=DEFAULT_BEDROCK_MODEL
     c.append(SimCase("dashboard", "bedrock:InvokeModel on another model", "bedrock:InvokeModel",
                      f"arn:aws:bedrock:{r}::foundation-model/amazon.nova-pro-v1:0", {}, DENIED))
 
+    # digest
+    profile = f"arn:aws:bedrock:{r}:{a}:inference-profile/{model_id}"
+    c.append(SimCase("digest", f"bedrock:InvokeModel on configured profile {model_id}", "bedrock:InvokeModel",
+                     profile, {}, ALLOWED))
+    c.append(SimCase("digest", "bedrock:InvokeModel on amazon.nova-pro-v1:0", "bedrock:InvokeModel",
+                     f"arn:aws:bedrock:{r}::foundation-model/amazon.nova-pro-v1:0", {}, DENIED))
+    c.append(SimCase("digest", f"InvokeFunction {p}notify", "lambda:InvokeFunction", fn("notify"), {}, ALLOWED))
+    c.append(SimCase("digest", f"InvokeFunction {p}scanner", "lambda:InvokeFunction", fn("scanner"), {}, DENIED))
+    c.append(SimCase("digest", "PutItem findings", "dynamodb:PutItem", fnd, {}, DENIED))
+    c.append(SimCase("digest", "Scan audit", "dynamodb:Scan", table("audit"), {}, DENIED))
+
     # scheduler
     c.append(SimCase("scheduler", f"InvokeFunction {p}notify", "lambda:InvokeFunction", fn("notify"), {}, DENIED))
     c.append(SimCase("scheduler", f"InvokeFunction {p}remediation", "lambda:InvokeFunction", fn("remediation"), {},
                      DENIED))
-    for target in ("scanner", "daily-cost", "daily-summary"):
+    for target in ("scanner", "daily-cost", "daily-summary", "digest"):
         c.append(SimCase("scheduler", f"InvokeFunction {p}{target}", "lambda:InvokeFunction", fn(target), {},
                          ALLOWED))
 
@@ -1018,7 +1097,8 @@ def render(rv: Review, exit_code: int) -> str:
     w("Rules: W1 trust without aws:SourceAccount / SourceArn · W2 Lambda permission without SourceArn / "
       "SourceAccount · W3 findings writes without dynamodb:Attributes / LeadingKeys (or ForAllValues without a "
       "Null guard) · W4 dashboard KMS / SSM / S3 scope · W5 logs beyond the role's own log group · W6 mutating EC2 "
-      "action without a guardian:dev-scope condition · W7 resource policy principals.")
+      "action without a guardian:dev-scope condition · W7 resource policy principals · W8 digest scope (Bedrock "
+      "model, Notify only, DynamoDB Scan only).")
     w("")
     if rv.accepted:
         w("### Accepted (reviewed, not changed)")
@@ -1131,7 +1211,8 @@ def main(argv=None):
     if actual != args.account:
         print(f"profile is for account {actual}, not {args.account}", file=sys.stderr)
         return 2
-    rv = Review(prefix=args.prefix, account=args.account, region=args.region, dev_scope=args.dev_scope)
+    rv = Review(prefix=args.prefix, account=args.account, region=args.region, dev_scope=args.dev_scope,
+                bedrock_model_id=args.bedrock_model_id)
     collect(session, rv)
     analyze(rv)
     if not args.no_simulate:

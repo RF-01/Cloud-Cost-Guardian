@@ -523,7 +523,7 @@ def _digest(body, v, findings, links, dry_run):
     title = f"Cost Guardian weekly digest: {len(items)} open finding(s)"
     body.h(title)
     if v.get("aiSummary"):
-        body.h3("Summary")
+        body.h3("AI summary (written by Amazon Bedrock from the data below)")
         body.p(str(v["aiSummary"]))
     if v["budgetAlerts"]:
         body.h3("Budget alerts")
