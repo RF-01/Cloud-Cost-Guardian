@@ -118,6 +118,7 @@ module "dashboard" {
   bedrock_max_tokens         = var.bedrock_max_tokens
   bedrock_daily_cap          = var.bedrock_daily_cap
   bedrock_max_question_chars = var.bedrock_max_question_chars
+  rate_limit_per_minute      = var.rate_limit_per_minute
   notify_function_name       = module.platform_core.notify_function_name
   notify_function_arn        = module.platform_core.notify_function_arn
   team_email                 = var.team_email

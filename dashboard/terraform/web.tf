@@ -336,7 +336,7 @@ resource "aws_instance" "dashboard" {
       BEDROCK_MAX_TOKENS         = tostring(var.bedrock_max_tokens)
       BEDROCK_DAILY_CAP          = tostring(var.bedrock_daily_cap)
       BEDROCK_MAX_QUESTION_CHARS = tostring(var.bedrock_max_question_chars)
-      RATE_LIMIT_PER_MINUTE      = "60"
+      RATE_LIMIT_PER_MINUTE      = tostring(var.rate_limit_per_minute)
       ASK_PER_VISITOR_PER_HOUR   = "10"
     }
     web_root      = "/opt/guardian-dashboard"

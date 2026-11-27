@@ -83,6 +83,17 @@ variable "bedrock_max_question_chars" {
   default     = 500
 }
 
+variable "rate_limit_per_minute" {
+  description = "Dashboard requests per visitor IP per sliding 60 s, every route except /healthz (RATE_LIMIT_PER_MINUTE; used by the dashboard module, CONTRACT §4.11)"
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.rate_limit_per_minute >= 1 && var.rate_limit_per_minute <= 5000 && floor(var.rate_limit_per_minute) == var.rate_limit_per_minute
+    error_message = "rate_limit_per_minute must be a whole number from 1 to 5000."
+  }
+}
+
 variable "origin_secret" {
   description = "Secret X-Origin-Verify header value between CloudFront and the dashboard (design §6.4)"
   type        = string

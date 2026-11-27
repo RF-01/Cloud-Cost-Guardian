@@ -18,6 +18,9 @@ scan_regions = "all"
 # bedrock_max_tokens         = 500
 # bedrock_max_question_chars = 500
 
+# Dashboard requests per visitor IP per 60 s (RATE_LIMIT_PER_MINUTE, CONTRACT §4.11). Uncomment only to override.
+# rate_limit_per_minute = 60
+
 # At least 16 characters each; generate random values, never reuse real passwords.
 # origin_secret: only A-Z a-z 0-9 . _ ~ + / = - (it is an HTTP header value and a systemd env value).
 origin_secret      = "CHANGE-ME-origin-secret-32-chars"

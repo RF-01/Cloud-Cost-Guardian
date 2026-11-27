@@ -13,8 +13,8 @@ from moto import mock_aws
 
 from dashboard.web import create_app
 from dashboard.web import ratelimit
-from dashboard.web.ask import (DATA_MAX_CHARS, SYSTEM_PROMPT, AskConfig, AskError, AskService, escape_json,
-                               fit_data, parse_question)
+from dashboard.web.ask import (DATA_MAX_CHARS, SYSTEM_PROMPT, AskConfig, AskError, AskService, clean_answer,
+                               escape_json, fit_data, parse_question)
 from dashboard.web.ratelimit import SlidingWindowLimiter, visitor_key
 from dashboard.web.store import BedrockCounter, CapReached, Store, TTLCache, budget_plain
 from dashboard.web.views import budget_status_view
@@ -799,3 +799,47 @@ def test_no_current_waste_gives_an_empty_list(aws):
     data = json.loads(data_of(env["bedrock"].calls[0])[0])
     assert data["currentWaste"] == [] and data["totals"]["activeEstimatedMonthlyWaste"] == 0
     assert [f["resourceId"] for f in data["handledFindings"]] == ["i-dry"]
+
+
+# ================================================================ rubric check A2
+
+
+def test_clean_answer_strips_leading_list_markers():
+    blocks = [{"text": "Top waste:\n- i-0abc idle, $5.00 a month\n* vol-1 unattached\n  • eip-2 unused\n"
+                       "– i-9 protected"}, {"text": "- second block starts a line"}, {"other": 1}]
+    assert clean_answer(blocks) == ("Top waste: i-0abc idle, $5.00 a month vol-1 unattached eip-2 unused "
+                                    "i-9 protected second block starts a line")
+
+
+def test_clean_answer_keeps_minus_in_numbers_and_mid_line():
+    blocks = [{"text": "-5 USD change\nsavings fell by -5 - mostly EBS\na * b • c – d\n--flag stays"}]
+    assert clean_answer(blocks) == "-5 USD change savings fell by -5 - mostly EBS a * b • c – d --flag stays"
+
+
+def test_answer_markers_removed_end_to_end(aws):
+    env = build(aws, bedrock=FakeBedrock(text="- one\n- two"))
+    assert ask(env["c"]).get_json()["answer"] == "one two"
+
+
+def test_current_waste_rows_protected_and_report_only_text(aws):
+    base = {"findingType": "EC2_IDLE", "status": "open", "region": "us-west-2"}
+    put(aws, "findings", {**base, "resourceId": "i-prot", "estimatedMonthlyCost": D("3"),
+                          "reportOnlyReason": "protected"})
+    put(aws, "findings", {**base, "resourceId": "i-asg", "estimatedMonthlyCost": D("2"),
+                          "reportOnlyReason": "autoscaling"})
+    put(aws, "findings", {**base, "resourceId": "i-plain", "estimatedMonthlyCost": D("1")})
+    put(aws, "findings", {**base, "resourceId": "i-rem", "status": "remediated", "dryRun": True,
+                          "remediatedAt": "2026-11-25T10:00:00Z", "reportOnlyReason": "protected"})
+    env = build(aws)
+    assert ask(env["c"]).status_code == 200
+    data = json.loads(data_of(env["bedrock"].calls[0])[0])
+    current = {f["resourceId"]: f for f in data["currentWaste"]}
+    assert current["i-prot"]["protected"] is True
+    assert current["i-prot"]["reportOnlyText"] == ("protected by its owner (guardian:protect=true): still costs "
+                                                   "money, gets no warnings or actions")
+    assert current["i-asg"]["protected"] is False
+    assert current["i-asg"]["reportOnlyText"] == ("part of an Auto Scaling group: still costs money, gets no "
+                                                  "warnings or actions")
+    assert current["i-plain"]["protected"] is False and "reportOnlyText" not in current["i-plain"]
+    handled = data["handledFindings"][0]
+    assert "protected" not in handled and "reportOnlyText" not in handled     # currentWaste rows only

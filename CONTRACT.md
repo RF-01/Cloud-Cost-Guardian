@@ -1,6 +1,6 @@
 # CONTRACT.md — shared formats between the lanes
 
-Version 2.28 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
+Version 2.29 (draft). Every lane builds against this file. **Do not change it alone:** propose the change,
 get agreement from the lanes it affects, then bump the version and note it in §10.
 
 Section numbers like "design §9.1" refer to `docs/design.md`.
@@ -499,7 +499,8 @@ The dashboard web app (EC2, behind CloudFront; design §6.3, §6.4, §12). Read-
 
 - **Per-visitor rate limit:** visitor key = the IP in `CloudFront-Viewer-Address` (`<ip>:<port>`, IPv6 too: the
   part before the last `:`); header missing → `unknown`. Runs after the origin check (`X-Origin-Verify`, 403) and
-  before the method check. Every route counts except `/healthz`: at most `RATE_LIMIT_PER_MINUTE` (60) requests per
+  before the method check. Every route counts except `/healthz`: at most `RATE_LIMIT_PER_MINUTE` (60; stack variable
+  `rate_limit_per_minute`, default 60, 1–5000, passed to the dashboard module) requests per
   visitor per sliding 60 s; over it → `429 {"error": "rate_limited"}` with `Retry-After` (seconds). In memory
   (one server), thread-safe; expired visitors are pruned and the table holds at most 10,000 visitors (when full,
   the one idle the longest is dropped). One log line per refusal (`rate_limited`, visitor IP, path; no other
@@ -528,8 +529,11 @@ The dashboard web app (EC2, behind CloudFront; design §6.3, §6.4, §12). Read-
     ADD is not idempotent).
 - **Data sent to the model** (from the cached reads of §7's tables plus the budget status): two finding lists,
   each sorted by estimated cost: `currentWaste` = active findings (`open` / `in_progress` / `failed`, report-only
-  included, §3.6) and `handledFindings` = findings `remediated` in the last 30 days (by `remediatedAt`); resolved
-  findings are in neither; the daily summaries of the last 30 days (newest first); bill-history totals of the last 30 full
+  included, §3.6; each row carries `"protected"`: true when `reportOnlyReason` = `protected`, else false, and
+  `reportOnlyText`: `protected` → "protected by its owner (guardian:protect=true): still costs money, gets no
+  warnings or actions", `autoscaling` → "part of an Auto Scaling group: still costs money, gets no warnings or
+  actions", absent otherwise) and `handledFindings` = findings `remediated` in the last 30 days (by
+  `remediatedAt`); resolved findings are in neither; the daily summaries of the last 30 days (newest first); bill-history totals of the last 30 full
   UTC days plus service and project sums over those days; audit event counts per day and event for the last 7
   days (no details); budget alerts of the last 30 days without `message` / `subject`; the budget status. Rows with
   `sample = true` are kept and carry `"sample": true` (and are left out of the totals). Names (`name`, `owner`,
@@ -563,8 +567,10 @@ The dashboard web app (EC2, behind CloudFront; design §6.3, §6.4, §12). Read-
     words.
   - **User message:** `<data>` + the JSON + `</data>`, then the question, marked as the user's question, after
     the data block.
-- **Response:** `200 {"answer", "remainingToday", "generatedAt"}`; the answer is the text blocks joined,
-  whitespace collapsed, at most 2,000 characters. The page shows it only with `textContent`, under "AI answer
+- **Response:** `200 {"answer", "remainingToday", "generatedAt"}`; the answer is the text blocks joined (each
+  block starts a line), a leading list marker (`- `, `* `, `• `, `– `, after optional indentation) removed from
+  each line with the text after it kept (a minus in a number such as `-5`, or mid-line, is kept), whitespace
+  collapsed, at most 2,000 characters. The page shows it only with `textContent`, under "AI answer
   (Amazon Bedrock) — may be wrong; check the numbers on this page", with "N of 30 questions left today".
 - **Logs:** one JSON line per question (`action` `ask`): the question's length only (never its text), `result`
   (`ok` or the error code), `inputTokens` / `outputTokens`, `ms`, `remainingToday`, visitor IP, and a `reason` on
@@ -655,7 +661,7 @@ platform core  ──►  engine, scanner, dashboard  ──►  platform edge, 
 | `platform/terraform/core` | `team_email`, `sender_email`, `budgets_enabled`, `account_budget_usd`, `project_budgets` (map(number), key = `project` tag value) | `table_names`, `table_arns` (maps keyed `findings`, `audit`, `tokens`, `creator_lookups`, `volume_attachments`, `daily_summaries`, `bill_history`, `budget_alerts`, `counters`), `team_topic_arn`, `dlq_arn`, `notify_function_arn` / `name`, **`vpc_id`, `public_subnet_id`**, **`action_api_id`, `action_api_execution_arn`, `action_api_url`** (the HTTP API + `$default` stage, no routes) |
 | `engine/terraform` | `table_names`, `table_arns`, `notify_function_arn` / `name`, `team_topic_arn`, `action_api_id`, `action_api_execution_arn`, `dev_scope`, `timeline_waits`, `postpone_seconds`, `detection_window_minutes` | `ec2_sfn_arn`, `ebs_sfn_arn`, `remediation_function_arn`, `action_function_arn` (engine adds the `/action` routes, the integration and the Lambda permission to core's API) |
 | `scanner/terraform` | `table_names`, `table_arns`, sfn ARNs, `notify_function_name`, `scan_regions`, `dev_scope`, `timeline_waits`, `detection_window_minutes`, `eip_stopped_threshold_hours` | `scanner_function_arn` |
-| `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `bedrock_max_tokens`, `bedrock_daily_cap`, `bedrock_max_question_chars`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name`, `notify_function_arn`, `team_email` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
+| `dashboard/terraform` | `table_names`, `table_arns`, `dlq_arn`, `bedrock_model_id`, `bedrock_max_tokens`, `bedrock_daily_cap`, `bedrock_max_question_chars`, `rate_limit_per_minute`, `vpc_id`, `public_subnet_id`, **`origin_secret`** (sensitive), `notify_function_name`, `notify_function_arn`, `team_email` | `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_function_arn`, `dashboard_instance_id`, `dashboard_public_dns` |
 | `platform/terraform/edge` | `dashboard_public_dns`, `origin_secret`, `dashboard_username`, `dashboard_password` (all three sensitive) | `dashboard_url` (the origin request policy forwards only `CloudFront-Viewer-Address`, `Content-Type`, `X-Requested-With` and the query string: no cookies, no `Authorization`; origin read timeout 30 s, §4.11) |
 | `platform/terraform/schedules` | `scanner_function_arn`, `scanner_function_name`, `daily_cost_function_arn`, `daily_summary_function_arn`, `digest_enabled` (bool, default false: creates the digest schedule; the schedule set depends only on this, never on ARNs), `digest_function_arn` (default `""`; required when `digest_enabled`), `dlq_arn`, `team_topic_arn`, `schedules_enabled` | `schedule_names` (map keyed by job), `schedule_group_name` |
 
@@ -745,3 +751,4 @@ budget amounts (now infra/stack variables `account_budget_usd`, `project_budgets
 - v2.26 — §4.11 Ask API (CSRF headers, per-visitor and daily limits, data and prompt rules), per-visitor rate limit, budget status; §3.5 counters; §6 / §8 settings and inputs (#43).
 - v2.27 — §4.11 Ask system prompt: only active findings are current waste; remediated dry-run findings are potential savings; no backticks (#43 follow-up).
 - v2.28 — §4.11 Ask data split into currentWaste / handledFindings with an outcome on each handled finding, potentialSavingsFromDryRun total; prompt: only currentWaste is waste (report-only included, matches §3.6), no-current-waste rule (#43 follow-ups 2–3).
+- v2.29 — §4.11 currentWaste rows carry protected / reportOnlyText; answer list markers stripped in code; rate_limit_per_minute stack variable (rubric check A2).

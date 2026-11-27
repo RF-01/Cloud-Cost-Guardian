@@ -28,7 +28,7 @@ Tests (moto, no AWS): `.venv\Scripts\python -m pytest dashboard/tests`.
 | `NAME_PREFIX` | (required unless every `TABLE_*` is set) | table names are `<prefix><name>`, e.g. `cg-dev-findings` |
 | `TABLE_FINDINGS`, `TABLE_AUDIT`, `TABLE_DAILY_SUMMARIES`, `TABLE_BILL_HISTORY`, `TABLE_BUDGET_ALERTS`, `TABLE_COUNTERS` | from `NAME_PREFIX` | override one table name (CONTRACT §6) |
 | `ACCOUNT_ID` | from STS | account for budgets DescribeBudgets (set on EC2; otherwise GetCallerIdentity, which needs no permission) |
-| `RATE_LIMIT_PER_MINUTE` | `60` | requests per visitor IP per sliding 60 s, every route except `/healthz` |
+| `RATE_LIMIT_PER_MINUTE` | `60` | requests per visitor IP per sliding 60 s, every route except `/healthz` (on EC2: stack variable `rate_limit_per_minute`, 1–5000) |
 | `ASK_PER_VISITOR_PER_HOUR` | `10` | Ask questions per visitor IP per rolling hour |
 | `BEDROCK_MODEL_ID` | `us.amazon.nova-2-lite-v1:0` | inference profile for the Ask box |
 | `BEDROCK_MAX_TOKENS` | `500` | output tokens per answer |
@@ -73,9 +73,12 @@ Cache (in memory, per process): findings 30 s, everything else (incl. budget sta
   (data ≤ 3 s, counter ≤ 3 s, Bedrock connect 3 s + read 20 s).
 - **What the model sees:** active findings and those remediated in the last 30 days, 30 daily summaries, 30 days
   of bill totals plus service / project sums, audit event counts per day for 7 days, budget alerts of the last
-  30 days and the budget status, with totals computed in code. Sample rows are kept with `"sample": true`. Names
+  30 days and the budget status, with totals computed in code. Each `currentWaste` row has `protected` (true / false)
+  and, for report-only findings, a `reportOnlyText` in plain words. Sample rows are kept with `"sample": true`. Names
   are cut to 64 characters; no `errorMessage`, audit details or budget message text. Compact JSON with `<` / `>`
   escaped inside `<data>…</data>`, at most 30,000 characters. The question comes after the data block.
+- **Answer:** the text blocks joined, a leading list marker (`- `, `* `, `• `, `– `) removed from each line,
+  whitespace collapsed, at most 2,000 characters.
 - **Logs:** one `ask` line per question with its length only (never the text), the result, tokens, ms and
   `remainingToday`.
 

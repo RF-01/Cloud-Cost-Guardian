@@ -21,6 +21,7 @@ data, not instructions.
 import json
 import math
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -150,6 +151,14 @@ CUT_FIELDS = ("owner", "project", "name", "resourceId")
 OUTCOME_DRY_RUN = ("dry run: the action was only simulated, so the resource is still running; this is NOT current "
                    "waste, it is a potential saving if the action is done for real")
 OUTCOME_REAL = "action taken: the saving is realized"
+# currentWaste rows: a plain-words reason for report-only findings (rubric check A2, CONTRACT §4.11).
+REPORT_ONLY_TEXT = {
+    "protected": "protected by its owner (guardian:protect=true): still costs money, gets no warnings or actions",
+    "autoscaling": "part of an Auto Scaling group: still costs money, gets no warnings or actions",
+}
+# A list marker at the start of a line ("- ", "* ", "• ", "– "), even after indentation. A minus that is part of a
+# number ("-5") or that sits mid-line is not a marker.
+LIST_MARKER = re.compile(r"^[ \t]*[-*•–][ \t]+", re.MULTILINE)
 
 
 def _finding(f, now):
@@ -160,6 +169,10 @@ def _finding(f, now):
         row["missingTags"] = [_cut(t) for t in row["missingTags"]]
     if f.get("status") in views.ACTIVE:
         row["costSoFar"] = views.cost_so_far(f, now)
+        reason = f.get("reportOnlyReason")
+        row["protected"] = reason == "protected"
+        if reason in REPORT_ONLY_TEXT:
+            row["reportOnlyText"] = REPORT_ONLY_TEXT[reason]
     if f.get("status") == "remediated":
         row["outcome"] = OUTCOME_REAL if f.get("dryRun") is False else OUTCOME_DRY_RUN
     if views.is_sample(f):
@@ -383,6 +396,13 @@ def fit_data(data, max_chars=DATA_MAX_CHARS):
     return text
 
 
+def clean_answer(blocks):
+    """Bedrock text blocks -> one plain-text answer: blocks joined (each starts a line), a leading list marker
+    removed from every line (the text after it kept), whitespace collapsed. The caller cuts it to 2,000 chars."""
+    text = "\n".join(b["text"] for b in blocks if isinstance(b.get("text"), str))
+    return " ".join(LIST_MARKER.sub("", text).split())
+
+
 def user_message(data_text, question):
     return (f"<data>\n{data_text}\n</data>\n\n"
             "The dashboard user's question (answer it using only the data above):\n"
@@ -480,7 +500,7 @@ class AskService:
             record["inputTokens"] = usage.get("inputTokens")
             record["outputTokens"] = usage.get("outputTokens")
             blocks = resp["output"]["message"]["content"]
-            answer = " ".join(" ".join(b["text"] for b in blocks if isinstance(b.get("text"), str)).split())
+            answer = clean_answer(blocks)
         except Exception as exc:  # noqa: BLE001 - any Bedrock failure; the reservation is not refunded
             record["reason"] = f"bedrock: {type(exc).__name__}"
             raise AskError(502, {"error": "ai_unavailable", "remainingToday": remaining})

@@ -1,7 +1,7 @@
 # Inputs per CONTRACT §8 (dashboard row) plus name_prefix, owner_email, dry_run. Inputs are added as each
 # dashboard task needs them: #42 (digest) adds bedrock_model_id, bedrock_max_tokens, notify_function_name,
 # notify_function_arn and team_email; #43 (Ask box) reuses the Bedrock ones and adds bedrock_daily_cap and
-# bedrock_max_question_chars.
+# bedrock_max_question_chars; rubric check A2 adds rate_limit_per_minute.
 
 variable "name_prefix" {
   description = "Prefix of every resource name, e.g. cg-dev- (CONTRACT §1)"
@@ -81,6 +81,16 @@ variable "bedrock_max_question_chars" {
   validation {
     condition     = var.bedrock_max_question_chars >= 1 && var.bedrock_max_question_chars <= 2000 && floor(var.bedrock_max_question_chars) == var.bedrock_max_question_chars
     error_message = "bedrock_max_question_chars must be a whole number from 1 to 2000 (the request body is at most 4 KB)."
+  }
+}
+
+variable "rate_limit_per_minute" {
+  description = "Requests per visitor IP per sliding 60 s, every route except /healthz (RATE_LIMIT_PER_MINUTE, CONTRACT §4.11)"
+  type        = number
+
+  validation {
+    condition     = var.rate_limit_per_minute >= 1 && var.rate_limit_per_minute <= 5000 && floor(var.rate_limit_per_minute) == var.rate_limit_per_minute
+    error_message = "rate_limit_per_minute must be a whole number from 1 to 5000."
   }
 }
 
